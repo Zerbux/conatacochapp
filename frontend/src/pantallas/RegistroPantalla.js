@@ -24,6 +24,14 @@ export default function RegistroPantalla({ onVolver }) {
   const [telefono, setTelefono] = useState('');
   const [password, setPassword] = useState('');
   const [confirmarPassword, setConfirmarPassword] = useState('');
+  const [errorMessage, setErrorMessage] = useState('');
+  const [registrationComplete, setRegistrationComplete] = useState(false);
+  const DismissContainer = Platform.OS === 'web' ? View : TouchableWithoutFeedback;
+
+  const reportError = (title, message) => {
+    setErrorMessage(message);
+    if (Platform.OS !== 'web') Alert.alert(title, message);
+  };
 
   const manejarRegistro = async () => {
     // === VALIDACIONES ESTRICTAS ===
@@ -31,27 +39,27 @@ export default function RegistroPantalla({ onVolver }) {
     const regexCorreo = /^[^\s@]+@[^\s@]+\.[^\s@]+$/; 
 
     if (!nombreUsuario || !apellidoUsuario || !correo || !telefono || !password) {
-      Alert.alert('Error', 'Todos los campos son obligatorios.');
+      reportError('Error', 'Todos los campos son obligatorios.');
       return;
     }
     if (!regexNombre.test(nombreUsuario.trim()) || !regexNombre.test(apellidoUsuario.trim())) {
-      Alert.alert('Datos Inválidos', 'El nombre y el apellido deben contener solo letras y tener al menos 2 caracteres.');
+      reportError('Datos Inválidos', 'El nombre y el apellido deben contener solo letras y tener al menos 2 caracteres.');
       return;
     }
     if (!regexCorreo.test(correo.trim())) {
-      Alert.alert('Datos Inválidos', 'Ingresa un correo electrónico válido (ej: usuario@mail.com).');
+      reportError('Datos Inválidos', 'Ingresa un correo electrónico válido (ej: usuario@mail.com).');
       return;
     }
     if (telefono.length < 8) {
-      Alert.alert('Datos Inválidos', 'El número de teléfono es muy corto.');
+      reportError('Datos Inválidos', 'El número de teléfono es muy corto.');
       return;
     }
     if (password.length < 8) {
-      Alert.alert('Seguridad', 'La contraseña debe tener un mínimo de 8 caracteres.');
+      reportError('Seguridad', 'La contraseña debe tener un mínimo de 8 caracteres.');
       return;
     }
     if (password !== confirmarPassword) {
-      Alert.alert('Error', 'Las contraseñas no coinciden.');
+      reportError('Error', 'Las contraseñas no coinciden.');
       return;
     }
 
@@ -66,14 +74,17 @@ export default function RegistroPantalla({ onVolver }) {
     try {
       await apiRequest('/api/registro-usuario/', {
         method: 'POST',
-        skipAuth: true,
         body: JSON.stringify(payload),
       });
-      Alert.alert('¡Bienvenido!', 'Tu cuenta ha sido registrada con éxito.', [
-        { text: 'Iniciar Sesión', onPress: () => onVolver() }
-      ]);
+      setErrorMessage('');
+      setRegistrationComplete(true);
+      if (Platform.OS !== 'web') {
+        Alert.alert('¡Bienvenido!', 'Tu cuenta ha sido registrada con éxito.', [
+          { text: 'Iniciar Sesión', onPress: () => onVolver() }
+        ]);
+      }
     } catch (error) {
-      Alert.alert('Error al registrar', error.message || 'No se pudo conectar con el servidor.');
+      reportError('Error al registrar', error.message || 'No se pudo conectar con el servidor.');
     }
   };
 
@@ -82,7 +93,7 @@ export default function RegistroPantalla({ onVolver }) {
       style={styles.contenedorPrincipal}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+      <DismissContainer {...(Platform.OS === 'web' ? {} : { onPress: Keyboard.dismiss })}>
         <View style={styles.innerContainer}>
           
           <SafeAreaView style={styles.headerBackground}>
@@ -110,6 +121,15 @@ export default function RegistroPantalla({ onVolver }) {
               </View>
 
               <View style={styles.formulario}>
+                {errorMessage ? <Text accessibilityRole="alert" style={styles.errorText}>{errorMessage}</Text> : null}
+                {registrationComplete ? (
+                  <View style={styles.successBox}>
+                    <Text style={styles.successText}>Tu cuenta fue registrada. Ya puedes iniciar sesion.</Text>
+                    <TouchableOpacity style={styles.botonRegistrar} onPress={onVolver}>
+                      <Text style={styles.textoBotonRegistrar}>Iniciar sesion</Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : null}
                 
                 <Text style={styles.label}>Nombre</Text>
                 <TextInput 
@@ -185,7 +205,7 @@ export default function RegistroPantalla({ onVolver }) {
             </ScrollView>
           </View>
         </View>
-      </TouchableWithoutFeedback>
+      </DismissContainer>
     </KeyboardAvoidingView>
   );
 }
@@ -284,4 +304,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '600',
   },
+  errorText: { color: '#B00020', fontSize: 13, marginBottom: 10 },
+  successBox: { backgroundColor: '#EAF7ED', borderRadius: 10, padding: 14, marginBottom: 12 },
+  successText: { color: '#176B2C', fontSize: 14, lineHeight: 20, textAlign: 'center' },
 });

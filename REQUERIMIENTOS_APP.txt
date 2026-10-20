@@ -1,0 +1,92 @@
+﻿REQUERIMIENTOS PARA EJECUTAR CONATACOCH EN OTRA PC
+=================================================
+
+1. PROGRAMAS QUE DEBES INSTALAR
+-------------------------------
+- Git para descargar el repositorio.
+- Python 3.12 o posterior compatible con Django 6.
+- Node.js LTS y npm.
+- PostgreSQL (el backend está configurado para usar PostgreSQL).
+- Expo Go en un teléfono Android/iPhone si se probará como aplicación móvil.
+- Android Studio, opcional, si se usará un emulador Android.
+
+2. BACKEND (DJANGO / PYTHON)
+----------------------------
+Paquetes Python que requiere el código:
+- Django 6.0.4
+- djangorestframework
+- django-cors-headers
+- psycopg (adaptador de PostgreSQL; puede instalarse como psycopg[binary])
+
+El repositorio no contiene requirements.txt. Para instalar estos paquetes en un entorno virtual:
+
+  python -m venv .venv
+  .\.venv\Scripts\Activate.ps1
+  python -m pip install "Django==6.0.4" djangorestframework django-cors-headers "psycopg[binary]"
+
+Si PowerShell bloquea la activación, ejecuta:
+  Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+
+3. BASE DE DATOS
+----------------
+- PostgreSQL debe estar iniciado.
+- Crear una base de datos llamada: colectivos_db
+- Configurar usuario, contraseña, host y puerto de PostgreSQL en backend/settings.py
+- Valores actuales de host y puerto: localhost y 5432.
+- No reutilices ni compartas contraseñas guardadas en el archivo local settings.py; configura una contraseña propia para esa PC.
+
+Desde la carpeta raíz del proyecto, después de configurar la base:
+  python manage.py migrate
+
+Opcional: poblar datos ficticios de demostración:
+  python manage.py seed_demo_data
+
+4. FRONTEND (EXPO / REACT NATIVE)
+---------------------------------
+Las dependencias JavaScript están declaradas en frontend/package.json y frontend/package-lock.json. Ejecuta desde frontend:
+
+  npm install
+  npx expo start
+
+Dependencias principales declaradas por la app:
+- Expo ~57.0.0
+- React 19.2.3
+- React Native 0.86.3
+- react-native-maps 1.27.2
+- expo-location ~57.0.21
+- expo-local-authentication ~57.0.3
+- expo-secure-store ~57.0.4
+- @react-native-async-storage/async-storage 2.2.0
+
+Para ejecutar en web (si las dependencias del entorno Expo están disponibles):
+  npm run web
+
+5. CONEXIÓN DEL TELÉFONO O DE OTRA PC AL BACKEND
+------------------------------------------------
+- Iniciar Django escuchando en la red local:
+  python manage.py runserver 0.0.0.0:8000
+- En frontend/.env, definir EXPO_PUBLIC_API_URL usando la IP local de la PC donde corre Django, por ejemplo:
+  EXPO_PUBLIC_API_URL=http://192.168.1.50:8000
+- frontend/.env.example es una plantilla. Copiarla como frontend/.env y reemplazar la IP de ejemplo.
+- El teléfono y la PC del backend deben estar en la misma red Wi-Fi.
+- Permitir conexiones al puerto 8000 en el firewall de Windows (red privada).
+- Reiniciar Expo después de cambiar frontend/.env.
+- Android Emulator puede usar http://10.0.2.2:8000. En teléfono físico no usar localhost; usar la IP LAN del PC.
+
+6. ORDEN RÁPIDO PARA ARRANCAR
+-----------------------------
+Terminal 1, carpeta raíz:
+  .\.venv\Scripts\Activate.ps1
+  python manage.py migrate
+  python manage.py runserver 0.0.0.0:8000
+
+Terminal 2:
+  cd frontend
+  npm install
+  npx expo start
+
+NOTAS
+-----
+- No se encontró requirements.txt en el repositorio; los paquetes Python de arriba se identificaron por las aplicaciones e imports del proyecto y el comentario de versión en backend/settings.py.
+- El modo de demostración local es opcional y se activa con EXPO_PUBLIC_DEMO_MODE=true en frontend/.env.
+- No uses el servidor de desarrollo de Django para producción.

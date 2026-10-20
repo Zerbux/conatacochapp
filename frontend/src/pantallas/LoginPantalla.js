@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { 
   View, Text, TextInput, TouchableOpacity, StyleSheet, 
-  Image, Alert, KeyboardAvoidingView, Platform, 
+  Image, KeyboardAvoidingView, Platform,
   TouchableWithoutFeedback, Keyboard 
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -12,13 +12,16 @@ export default function LoginPantalla({ onLogin, onIrRegistro, onChoferPress, on
   const [credencial, setCredencial] = useState(''); 
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
+  const DismissContainer = Platform.OS === 'web' ? View : TouchableWithoutFeedback;
 
   const manejarLogin = async () => {
     if (!credencial || !password) {
-      Alert.alert('Error', 'Por favor ingresa tu credencial y contraseña.');
+      setErrorMessage('Ingresa tu credencial y contrasena.');
       return;
     }
 
+    setErrorMessage('');
     setLoading(true);
     try {
       const user = await loginWithRole(
@@ -28,7 +31,7 @@ export default function LoginPantalla({ onLogin, onIrRegistro, onChoferPress, on
       );
       onLogin(user);
     } catch (error) {
-      Alert.alert('No se pudo iniciar sesión', error.message || 'Comprueba tu conexión y tus credenciales.');
+      setErrorMessage(error.message || 'Comprueba tu conexion y tus credenciales.');
     } finally {
       setLoading(false);
     }
@@ -39,7 +42,7 @@ export default function LoginPantalla({ onLogin, onIrRegistro, onChoferPress, on
       style={styles.contenedorPrincipal}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+      <DismissContainer {...(Platform.OS === 'web' ? {} : { onPress: Keyboard.dismiss })}>
         <View style={styles.innerContainer}>
           <SafeAreaView style={styles.headerBackground}>
             <View style={styles.headerContent}>
@@ -66,6 +69,7 @@ export default function LoginPantalla({ onLogin, onIrRegistro, onChoferPress, on
                 value={credencial} 
                 onChangeText={setCredencial} 
                 autoCapitalize="none" 
+                autoComplete="username"
               />
 
               <Text style={styles.label}>Contraseña</Text>
@@ -76,7 +80,10 @@ export default function LoginPantalla({ onLogin, onIrRegistro, onChoferPress, on
                 value={password} 
                 onChangeText={setPassword} 
                 secureTextEntry 
+                autoComplete="current-password"
               />
+
+              {errorMessage ? <Text accessibilityRole="alert" style={styles.errorText}>{errorMessage}</Text> : null}
 
               <TouchableOpacity style={styles.botonLogin} onPress={manejarLogin} disabled={loading}>
                 <Text style={styles.textoBotonLogin}>{loading ? 'Ingresando...' : 'Ingresar'}</Text>
@@ -94,7 +101,7 @@ export default function LoginPantalla({ onLogin, onIrRegistro, onChoferPress, on
             </View>
           </View>
         </View>
-      </TouchableWithoutFeedback>
+      </DismissContainer>
     </KeyboardAvoidingView>
   );
 }
@@ -115,5 +122,6 @@ const styles = StyleSheet.create({
   botonLogin: { backgroundColor: '#1A9C43', padding: 16, borderRadius: 10, alignItems: 'center', marginTop: 10 },
   textoBotonLogin: { color: '#FFFFFF', fontSize: 16, fontWeight: 'bold' },
   botonVolver: { marginTop: 25, alignItems: 'center' },
-  textoBotonVolver: { color: '#1A9C43', fontSize: 15, fontWeight: '600' }
+  textoBotonVolver: { color: '#1A9C43', fontSize: 15, fontWeight: '600' },
+  errorText: { color: '#B00020', fontSize: 13, lineHeight: 18, marginBottom: 10 }
 });

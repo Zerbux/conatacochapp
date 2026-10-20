@@ -1,7 +1,9 @@
-﻿import React, { useState } from 'react';
-import { Alert, StyleSheet, View, Text, TouchableOpacity, StatusBar, Platform } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { ActivityIndicator, Alert, StyleSheet, View, Text, TouchableOpacity, StatusBar, Platform } from 'react-native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { ensureTemporarySession } from './src/servicios/guestSessionService';
+import { logout as logoutSession } from './src/servicios/authService';
 
 // IMPORTACIONES DE TODAS LAS PANTALLAS (AquÃ­ estÃ¡ la clave del error)
 import InicioUsuarioPantalla from './src/pantallas/InicioUsuarioPantalla';
@@ -16,6 +18,23 @@ import AdminNavigator from './src/administrador/AdminNavigator';
 export default function App() {
   const [pantallaActual, setPantallaActual] = useState('inicio');
   const [areaActual, setAreaActual] = useState('pasajero');
+  const [usuarioActual, setUsuarioActual] = useState(null);
+  const [sessionReady, setSessionReady] = useState(false);
+  const [sessionError, setSessionError] = useState('');
+
+  const initializeSession = async () => {
+    setSessionError('');
+    try {
+      await ensureTemporarySession();
+      setSessionReady(true);
+    } catch (error) {
+      setSessionError(error.message || 'No fue posible iniciar la sesion temporal.');
+    }
+  };
+
+  useEffect(() => {
+    initializeSession();
+  }, []);
 
   const manejarLogin = (usuario) => {
     const rol = String(usuario?.tipo_usuario || '').toUpperCase();
@@ -41,14 +60,54 @@ export default function App() {
       setAreaActual('administrador');
       return;
     }
+    setUsuarioActual(usuario);
     setAreaActual('pasajero');
     setPantallaActual('inicio');
   };
 
   const volverAPasajero = () => {
+    setUsuarioActual(null);
     setAreaActual('pasajero');
     setPantallaActual('perfil');
+    ensureTemporarySession().catch(() => {});
   };
+
+  const cerrarSesionPasajero = async () => {
+    try {
+      await logoutSession();
+    } finally {
+      try {
+        await ensureTemporarySession();
+      } catch (_error) {
+        // Mantiene visible el perfil aunque el servidor no permita renovar la sesión temporal.
+      }
+      setUsuarioActual(null);
+      setAreaActual('pasajero');
+      setPantallaActual('perfil');
+    }
+  };
+
+  if (!sessionReady) {
+    return (
+      <SafeAreaProvider>
+        <View style={styles.sessionLoading}>
+          {sessionError ? (
+            <>
+              <Text style={styles.sessionError}>{sessionError}</Text>
+              <TouchableOpacity style={styles.sessionRetry} onPress={initializeSession}>
+                <Text style={styles.sessionRetryText}>Reintentar</Text>
+              </TouchableOpacity>
+            </>
+          ) : (
+            <>
+              <ActivityIndicator size="large" color="#149E2D" />
+              <Text style={styles.sessionLoadingText}>Preparando sesion...</Text>
+            </>
+          )}
+        </View>
+      </SafeAreaProvider>
+    );
+  }
 
   return (
     <SafeAreaProvider>
@@ -63,10 +122,10 @@ export default function App() {
             <AdminNavigator onLogout={volverAPasajero} />
           ) : (
             <>
-              {pantallaActual === 'inicio' && <InicioUsuarioPantalla />}
+              {pantallaActual === 'inicio' && <InicioUsuarioPantalla usuarioActual={usuarioActual} />}
               {pantallaActual === 'rutas' && <RutasPantalla />}
               {pantallaActual === 'reservas' && <ReservasPantalla />}
-              {pantallaActual === 'perfil' && <PerfilPantalla onLoginPress={() => setPantallaActual('login')} />}
+              {pantallaActual === 'perfil' && <PerfilPantalla user={usuarioActual} onLoginPress={() => setPantallaActual('login')} onLogout={cerrarSesionPasajero} />}
               {pantallaActual === 'login' && (
                 <LoginPantalla
                   onVolver={() => setPantallaActual('perfil')}
@@ -138,6 +197,11 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
+  sessionLoading: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, backgroundColor: '#FFFFFF' },
+  sessionLoadingText: { marginTop: 12, color: '#333333', fontSize: 15 },
+  sessionError: { color: '#B00020', fontSize: 15, textAlign: 'center', marginBottom: 14 },
+  sessionRetry: { backgroundColor: '#149E2D', borderRadius: 8, paddingHorizontal: 20, paddingVertical: 12 },
+  sessionRetryText: { color: '#FFFFFF', fontWeight: '700' },
   container: {
     flex: 1,
     backgroundColor: '#000000',

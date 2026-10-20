@@ -4,7 +4,7 @@ from rest_framework.routers import DefaultRouter
 from core.views import (
     CalificacionViewSet, ConductorViewSet, EmergenciaViewSet,
     LicenciaViewSet, LoginUsuarioView, LogoutView, NotificacionViewSet,
-    RegistroConductorView, RegistroUsuarioView, RutaViewSet,
+    RegistroConductorView, RegistroUsuarioView, UsuarioTemporalView, RutaViewSet,
     SolicitudViewSet, TrazadoRutaViewSet, UbicacionViewSet,
     UsuarioViewSet, VehiculoRutaViewSet, VehiculoViewSet, ViajeViewSet,
 )
@@ -29,6 +29,7 @@ urlpatterns = [
     path('api/', include(router.urls)),
     
     path('api/registro-conductor/', RegistroConductorView.as_view(), name='registro_conductor'),
+    path('api/usuario-temporal/', UsuarioTemporalView.as_view(), name='usuario_temporal'),
     path('api/registro-usuario/', RegistroUsuarioView.as_view(), name='registro_usuario'),
     path('api/login/', LoginUsuarioView.as_view(), name='login_usuario'),
     path('api/logout/', LogoutView.as_view(), name='logout_usuario'),

@@ -2,7 +2,7 @@ import React from 'react';
 import { StyleSheet, Text, View, TouchableOpacity, ScrollView, useWindowDimensions, Platform, Image } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
-export default function PerfilPantalla({ onLoginPress }) {
+export default function PerfilPantalla({ user, onLoginPress, onLogout }) {
   const { width } = useWindowDimensions();
   const opcionesMenu = ['Informacion', 'Seguridad', 'Legal', 'Pagos', 'Ayuda', 'Configuracion'];
 
@@ -26,9 +26,20 @@ export default function PerfilPantalla({ onLoginPress }) {
           </View>
 
           <View style={styles.loginButtonWrapper}>
-            <TouchableOpacity style={styles.loginButton} onPress={onLoginPress}>
-              <Text style={styles.loginButtonText}>Iniciar sesión</Text>
-            </TouchableOpacity>
+            {user ? (
+              <>
+                <Text style={styles.profileName}>{user.nombre || `${user.nombre_usuario || ''} ${user.apellido_usuario || ''}`.trim()}</Text>
+                <Text style={styles.profileEmail}>{user.correo || user.email}</Text>
+                <Text style={styles.profileRole}>Cuenta {user.tipo_usuario || 'REGISTRADO'}</Text>
+                <TouchableOpacity style={styles.logoutButton} onPress={onLogout}>
+                  <Text style={styles.loginButtonText}>Cerrar sesion</Text>
+                </TouchableOpacity>
+              </>
+            ) : (
+              <TouchableOpacity style={styles.loginButton} onPress={onLoginPress}>
+                <Text style={styles.loginButtonText}>Iniciar sesion</Text>
+              </TouchableOpacity>
+            )}
           </View>
 
           <View style={styles.menuContainer}>
@@ -55,6 +66,10 @@ const styles = StyleSheet.create({
   avatarWrapper: { alignItems: 'center', marginTop: 20, marginBottom: 16 },
   avatarCircle: { width: 120, height: 120, borderRadius: 60, backgroundColor: '#149E2D', justifyContent: 'center', alignItems: 'center' },
   loginButtonWrapper: { alignItems: 'center', marginBottom: 30 },
+  profileName: { color: '#222222', fontSize: 20, fontWeight: '800', textAlign: 'center' },
+  profileEmail: { color: '#555555', fontSize: 14, marginTop: 5 },
+  profileRole: { color: '#149E2D', fontSize: 13, fontWeight: '700', marginTop: 5, marginBottom: 14 },
+  logoutButton: { backgroundColor: '#D71920', paddingVertical: 12, paddingHorizontal: 24, borderRadius: 8 },
   loginButton: { backgroundColor: '#149E2D', paddingVertical: 12, paddingHorizontal: 24, borderRadius: 8 },
   loginButtonText: { color: '#FFFFFF', fontSize: 16, fontWeight: '600' },
   menuContainer: { gap: 12 },

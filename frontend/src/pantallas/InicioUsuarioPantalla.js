@@ -3,11 +3,11 @@ import {
   StyleSheet, Text, View, TextInput, TouchableOpacity, ActivityIndicator,
   useWindowDimensions, Platform, FlatList, Alert, Keyboard, Image
 } from 'react-native';
-import MapView, { Marker, Polyline, PROVIDER_DEFAULT } from 'react-native-maps';
+import MapView, { Marker, Polyline, PROVIDER_DEFAULT } from '../componentes/Mapa';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { rutasConatacoch } from './rutasConatacoch';
 
-export default function InicioUsuarioPantalla() {
+export default function InicioUsuarioPantalla({ usuarioActual }) {
   const { width } = useWindowDimensions();
   const mapRef = useRef(null);
   const [busqueda, setBusqueda] = useState('');
@@ -97,6 +97,10 @@ export default function InicioUsuarioPantalla() {
         </View>
       </View>
 
+      {usuarioActual ? (
+        <Text style={styles.welcomeLabel}>Hola, {usuarioActual.nombre_usuario || usuarioActual.nombre || 'pasajero'}</Text>
+      ) : null}
+
       <View style={styles.mapContainer}>
         <MapView
           ref={mapRef} provider={PROVIDER_DEFAULT} style={styles.map}
@@ -157,6 +161,7 @@ const styles = StyleSheet.create({
   header: { backgroundColor: '#000000', paddingTop: Platform.OS === 'ios' ? 48 : 32, paddingBottom: 12 },
   logoRow: { flexDirection: 'row', alignItems: 'center' },
   logoImage: { height: 45, maxWidth: '100%' },
+  welcomeLabel: { color: '#FFFFFF', fontSize: 14, fontWeight: '700', marginTop: 6 },
   mapContainer: { flex: 1, backgroundColor: '#E5E3DF' },
   map: { width: '100%', height: '100%' },
   userPin: { alignItems: 'center', justifyContent: 'center' },

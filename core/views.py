@@ -1,3 +1,5 @@
+import secrets
+
 from django.contrib.auth import authenticate
 from django.db import transaction
 from django.db.models import Prefetch, Q
@@ -342,30 +344,90 @@ class RegistroConductorView(views.APIView):
         )
 
 
-class RegistroUsuarioView(views.APIView):
+class UsuarioTemporalView(views.APIView):
     permission_classes = [AllowAny]
     authentication_classes = []
 
     def post(self, request):
-        data = request.data.copy()
-        email = (data.get('email') or data.get('correo') or '').strip().lower()
-        if email:
-            data['email'] = email
-            data.setdefault('username', email)
-            base_identifier = f"USR-{email.split('@')[0]}"
-            identifier = base_identifier
-            suffix = 1
-            while Usuario.objects.filter(identificador=identifier).exists():
-                suffix += 1
-                identifier = f"{base_identifier}-{suffix}"
-            data.setdefault('identificador', identifier)
-        serializer = UsuarioSerializer(data=data)
-        serializer.is_valid(raise_exception=True)
-        user = serializer.save(tipo_usuario='REGISTRADO', is_active=True)
-        return Response(
-            {'mensaje': 'Usuario registrado exitosamente', 'usuario_id': user.id},
-            status=status.HTTP_201_CREATED,
+        installation_id = (request.data.get('installation_id') or '').strip()
+        if installation_id:
+            user = Usuario.objects.filter(
+                installation_id=installation_id,
+                tipo_usuario='TEMPORAL',
+                is_active=True,
+            ).first()
+            if user:
+                token, _ = Token.objects.get_or_create(user=user)
+                return Response({
+                    'key': token.key,
+                    'installation_id': installation_id,
+                    'id': user.id,
+                    'identificador': user.identificador,
+                    'tipo_usuario': user.tipo_usuario,
+                })
+        if not installation_id or Usuario.objects.filter(installation_id=installation_id).exists():
+            installation_id = secrets.token_urlsafe(32)
+        identifier = f'USR-TEMP-{secrets.token_hex(10).upper()}'
+        while Usuario.objects.filter(identificador=identifier).exists():
+            identifier = f'USR-TEMP-{secrets.token_hex(10).upper()}'
+        user = Usuario.objects.create_user(
+            username=f'temporal-{secrets.token_hex(16)}',
+            password=secrets.token_urlsafe(32),
+            identificador=identifier,
+            tipo_usuario='TEMPORAL',
+            installation_id=installation_id,
+            is_active=True,
         )
+        token = Token.objects.create(user=user)
+        return Response({
+            'key': token.key,
+            'installation_id': installation_id,
+            'id': user.id,
+            'identificador': user.identificador,
+            'tipo_usuario': user.tipo_usuario,
+        }, status=status.HTTP_201_CREATED)
+
+
+class RegistroUsuarioView(views.APIView):
+    authentication_classes = [TokenAuthentication]
+
+    def post(self, request):
+        user = request.user
+        if user.tipo_usuario != 'TEMPORAL':
+            return Response({'error': 'Solo una sesión temporal puede completar el registro.'}, status=status.HTTP_403_FORBIDDEN)
+        data = request.data
+        nombre = str(data.get('nombre_usuario') or '').strip()
+        apellido = str(data.get('apellido_usuario') or '').strip()
+        correo = str(data.get('correo') or data.get('email') or '').strip().lower()
+        telefono = str(data.get('telefono') or '').strip()
+        password = data.get('password') or ''
+        if not all((nombre, apellido, correo, telefono, password)):
+            return Response({'error': 'Todos los campos son obligatorios.'}, status=status.HTTP_400_BAD_REQUEST)
+        if len(password) < 8:
+            return Response({'error': 'La contraseña debe tener al menos 8 caracteres.'}, status=status.HTTP_400_BAD_REQUEST)
+        if Usuario.objects.filter(email__iexact=correo).exclude(pk=user.pk).exists():
+            return Response({'error': 'Ya existe una cuenta con ese correo.'}, status=status.HTTP_400_BAD_REQUEST)
+        if Usuario.objects.filter(username__iexact=correo).exclude(pk=user.pk).exists():
+            return Response({'error': 'Ese correo ya está asociado a otra cuenta.'}, status=status.HTTP_400_BAD_REQUEST)
+        user.nombre_usuario = nombre
+        user.apellido_usuario = apellido
+        user.email = correo
+        user.username = correo
+        user.telefono = telefono
+        user.set_password(password)
+        user.tipo_usuario = 'REGISTRADO'
+        user.installation_id = None
+        user.is_active = True
+        user.save(update_fields=[
+            'nombre_usuario', 'apellido_usuario', 'email', 'username', 'telefono',
+            'password', 'tipo_usuario', 'installation_id', 'is_active',
+        ])
+        return Response({
+            'mensaje': 'Usuario registrado exitosamente.',
+            'usuario_id': user.id,
+            'identificador': user.identificador,
+            'tipo_usuario': user.tipo_usuario,
+        }, status=status.HTTP_200_OK)
 
 
 class LoginUsuarioView(views.APIView):
