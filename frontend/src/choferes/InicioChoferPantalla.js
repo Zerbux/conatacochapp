@@ -3,6 +3,7 @@ import {
   Alert,
   Image,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   ScrollView,
   StyleSheet,
@@ -31,7 +32,6 @@ import {
   StatusBadge,
   VehicleCard,
 } from '../componentes/KitUI';
-import { rutasConatacoch } from '../pantallas/rutasConatacoch';
 import { createRecord, listRecords, updateRecord } from '../servicios/dataService';
 import { DEMO_MODE, loginWithRole, logout as logoutSession } from '../servicios/authService';
 import {
@@ -45,6 +45,15 @@ const REGION_LA_GRANJA = {
   longitude: -70.6278,
   latitudeDelta: 0.035,
   longitudeDelta: 0.035,
+};
+
+const distanceBetweenCoordinates = (lat1, lon1, lat2, lon2) => {
+  if ([lat1, lon1, lat2, lon2].some((value) => value == null || Number.isNaN(Number(value)))) return null;
+  const radians = (value) => Number(value) * Math.PI / 180;
+  const dLat = radians(lat2 - lat1);
+  const dLon = radians(lon2 - lon1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(radians(lat1)) * Math.cos(radians(lat2)) * Math.sin(dLon / 2) ** 2;
+  return Math.round(6371000 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
 };
 
 const TABS = [
@@ -254,7 +263,7 @@ function DriverHome({
   gpsError,
 }) {
   const { width } = useWindowDimensions();
-  const route = assignedRoute || (DEMO_MODE ? rutasConatacoch.find((item) => item.folio === '233003') : null);
+  const route = assignedRoute || null;
   const isInService = availability === 'DISPONIBLE' || availability === 'OCUPADO';
   const gpsActive = isInService && Boolean(gpsLocation);
   const routeCoordinates = useMemo(() => getRouteCoordinates(route, 'IDA'), [route]);
@@ -432,7 +441,7 @@ function RequestDetails({ request, onBack, onDecision }) {
   }
   return (
     <Page title={`Solicitud ${request.id}`} subtitle="Información mínima para decidir" onBack={onBack}>
-      <DemoBanner>La solicitud y los datos del pasajero son MOCK.</DemoBanner>
+      {DEMO_MODE ? <DemoBanner>La solicitud y los datos del pasajero son MOCK.</DemoBanner> : null}
       <DataCard>
         <InfoRow label="Pasajero" value={request.pasajero} />
         <InfoRow label="Cantidad de pasajeros" value={request.asientos} />
@@ -471,7 +480,7 @@ function TripScreen({ trip, gpsLocation, onBack, onAction }) {
 
   return (
     <Page title="Viaje actual" subtitle={`Estado: ${trip.estado}`} onBack={onBack}>
-      <DemoBanner>Viaje MOCK · Las ubicaciones del mapa son del GPS del dispositivo.</DemoBanner>
+      {DEMO_MODE ? <DemoBanner>Viaje MOCK · Las ubicaciones del mapa son del GPS del dispositivo.</DemoBanner> : null}
       <DataCard>
         <InfoRow label="ID" value={trip.id} />
         <InfoRow label="Ruta" value={`Folio ${trip.ruta}`} />
@@ -541,7 +550,7 @@ function DriverAlerts({ requests, availability, onOpenRequest, onOpenNotificatio
   const isInService = availability === 'DISPONIBLE' || availability === 'OCUPADO';
   return (
     <Page title="Alertas" subtitle={isInService ? 'Solicitudes y avisos para el conductor' : 'Avisos para el conductor'}>
-      <DemoBanner>Los avisos y solicitudes visibles en DEMO no son operaciones reales.</DemoBanner>
+      {DEMO_MODE ? <DemoBanner>Los avisos y solicitudes visibles en DEMO no son operaciones reales.</DemoBanner> : null}
       {error ? <Text accessibilityRole="alert" style={styles.errorText}>{error}</Text> : null}
       <View style={styles.alertActionRow}>
         <SecondaryButton title="Notificaciones" icon="notifications-outline" onPress={onOpenNotifications} style={styles.alertActionButton} />
@@ -632,7 +641,7 @@ function DriverVehicle({ onBack, onReport, vehicle, route }) {
 }
 
 function DriverRoute({ route: assignedRoute, onBack, gpsLocation, availability }) {
-  const route = assignedRoute || (DEMO_MODE ? rutasConatacoch.find((item) => item.folio === '233003') : null);
+  const route = assignedRoute || null;
   const routeCoordinates = getRouteCoordinates(route, 'IDA');
   const returnCoordinates = getRouteCoordinates(route, 'REGRESO');
   const gpsActive = Boolean(gpsLocation) && ['DISPONIBLE', 'OCUPADO'].includes(availability);
@@ -984,6 +993,7 @@ export default function InicioChoferPantalla({ onLogout }) {
   const [driverRoute, setDriverRoute] = useState(null);
   const [sendingSOS, setSendingSOS] = useState(false);
   const [requests, setRequests] = useState([]);
+  const [incomingRequest, setIncomingRequest] = useState(null);
   const [currentTrip, setCurrentTrip] = useState(null);
   const [gpsLocation, setGpsLocation] = useState(null);
   const [gpsPermission, setGpsPermission] = useState('');
@@ -1031,6 +1041,25 @@ export default function InicioChoferPantalla({ onLogout }) {
         if (mounted) setError(loadError.message || 'No se pudieron cargar los datos de operación.');
       });
     return () => { mounted = false; };
+  }, [user]);
+
+  useEffect(() => {
+    if (!user) return undefined;
+    let mounted = true;
+    const pollIncoming = async () => {
+      try {
+        const records = await listRecords('solicitudes');
+        if (!mounted) return;
+        setRequests(records);
+        setIncomingRequest((current) => {
+          const currentPending = current && records.find((item) => String(item.id) === String(current.id) && item.estado === 'PENDIENTE');
+          return currentPending || records.find((item) => item.estado === 'PENDIENTE') || null;
+        });
+      } catch { /* el siguiente ciclo vuelve a consultar */ }
+    };
+    pollIncoming();
+    const timer = setInterval(pollIncoming, 4000);
+    return () => { mounted = false; clearInterval(timer); };
   }, [user]);
 
   useEffect(() => {
@@ -1247,6 +1276,7 @@ export default function InicioChoferPantalla({ onLogout }) {
     }
     try {
       await updateRecord('solicitudes', request.id, { estado: decision });
+      setIncomingRequest(null);
       const updatedRequests = await listRecords('solicitudes');
       setRequests(updatedRequests);
       setSecondaryScreen(null);
@@ -1441,12 +1471,45 @@ export default function InicioChoferPantalla({ onLogout }) {
     <View style={styles.appContainer}>
       <View style={styles.screenContent}>{currentScreen}</View>
       {!secondaryScreen ? <DriverTabBar active={activeTab} onChange={setActiveTab} /> : null}
+      <Modal visible={Boolean(incomingRequest && incomingRequest.estado === 'PENDIENTE')} transparent animationType="fade" onRequestClose={() => setIncomingRequest(null)}>
+        <View style={styles.incomingOverlay}>
+          <View style={styles.incomingCard}>
+            <View style={styles.incomingIcon}><Ionicons name="car-sport" size={28} color="#FFFFFF" /></View>
+            <Text style={styles.incomingTitle}>Nueva solicitud</Text>
+            <Text style={styles.incomingName}>{incomingRequest?.pasajero || (incomingRequest?.usuario_identificador?.includes('TEMP') ? 'Usuario temporal' : 'Pasajero')}</Text>
+            <Text style={styles.incomingDetail}>{incomingRequest?.asientos || incomingRequest?.cantidad_asientos || 1} pasajero(s) · Ruta {incomingRequest?.ruta_folio || incomingRequest?.ruta}</Text>
+            <Text style={styles.incomingDetail}>{incomingRequest?.ruta_origen} ↔ {incomingRequest?.ruta_destino}</Text>
+            <Text style={styles.incomingDetail}>
+              {gpsLocation?.coords && incomingRequest?.latitud_recogida != null
+                ? `A ${distanceBetweenCoordinates(gpsLocation.coords.latitude, gpsLocation.coords.longitude, incomingRequest.latitud_recogida, incomingRequest.longitud_recogida)} m del punto de recogida`
+                : 'Ubicación del conductor no disponible'}
+            </Text>
+            <Text style={styles.incomingTime}>{incomingRequest?.fecha ? new Date(incomingRequest.fecha).toLocaleTimeString() : 'Solicitud recibida ahora'}</Text>
+            <View style={styles.incomingActions}>
+              <TouchableOpacity style={styles.rejectAction} onPress={() => decideRequest(incomingRequest, 'RECHAZADA')}><Text style={styles.rejectActionText}>Rechazar</Text></TouchableOpacity>
+              <TouchableOpacity style={styles.acceptAction} onPress={() => decideRequest(incomingRequest, 'ACEPTADA')}><Text style={styles.acceptActionText}>Aceptar</Text></TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   appContainer: { flex: 1, backgroundColor: '#F5F5F5' },
+  incomingOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.58)', justifyContent: 'center', padding: 22 },
+  incomingCard: { width: '100%', maxWidth: 440, alignSelf: 'center', borderRadius: 24, backgroundColor: '#FFFFFF', padding: 24, alignItems: 'center', elevation: 12 },
+  incomingIcon: { width: 58, height: 58, borderRadius: 29, backgroundColor: '#149E2D', alignItems: 'center', justifyContent: 'center', marginBottom: 10 },
+  incomingTitle: { color: '#149E2D', fontSize: 13, fontWeight: '900', textTransform: 'uppercase', letterSpacing: 1 },
+  incomingName: { color: '#111111', fontSize: 22, fontWeight: '900', marginTop: 7, textAlign: 'center' },
+  incomingDetail: { color: '#454545', fontSize: 14, lineHeight: 21, textAlign: 'center', marginTop: 8 },
+  incomingTime: { color: '#777777', fontSize: 12, marginTop: 10 },
+  incomingActions: { width: '100%', flexDirection: 'row', gap: 10, marginTop: 22 },
+  rejectAction: { flex: 1, minHeight: 50, borderRadius: 14, borderWidth: 1, borderColor: '#D71920', alignItems: 'center', justifyContent: 'center' },
+  rejectActionText: { color: '#D71920', fontSize: 15, fontWeight: '900', textTransform: 'uppercase' },
+  acceptAction: { flex: 1, minHeight: 50, borderRadius: 14, backgroundColor: '#149E2D', alignItems: 'center', justifyContent: 'center' },
+  acceptActionText: { color: '#FFFFFF', fontSize: 15, fontWeight: '900', textTransform: 'uppercase' },
   screenContent: { flex: 1 },
   homeScreen: { backgroundColor: '#000000' },
   driverHeader: {

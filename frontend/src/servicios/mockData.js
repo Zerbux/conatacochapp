@@ -2,7 +2,7 @@ import { rutasConatacoch } from '../pantallas/rutasConatacoch';
 
 export const MOCK_USERS = [
   {
-    id: 'USR-DEMO-001',
+    id: 1,
     identificador: 'USR-DEMO-001',
     nombre_usuario: 'Usuario',
     apellido_usuario: 'DEMO 01',
@@ -15,7 +15,7 @@ export const MOCK_USERS = [
     installation_id: null,
   },
   {
-    id: 'USR-TEMP-DEMO-002',
+    id: 2,
     identificador: 'USR-TEMP-DEMO-002',
     nombre_usuario: 'Usuario temporal',
     apellido_usuario: 'DEMO',
@@ -28,7 +28,7 @@ export const MOCK_USERS = [
     installation_id: 'INSTALLATION-DEMO-002',
   },
   {
-    id: 'ADMIN-DEMO-001',
+    id: 3,
     identificador: 'ADMIN-DEMO-001',
     nombre_usuario: 'Administrador',
     apellido_usuario: 'DEMO',
@@ -40,11 +40,24 @@ export const MOCK_USERS = [
     estado: 'ACTIVO',
     installation_id: null,
   },
+  {
+    id: 4,
+    identificador: 'USR-COND-DEMO-001',
+    nombre_usuario: 'Conductor DEMO',
+    apellido_usuario: '01',
+    email: 'conductor-demo-01@example.test',
+    telefono: 'No disponible DEMO',
+    tipo_usuario: 'CONDUCTOR',
+    fechaCreacion: '2026-01-01',
+    ultimaActividad: '2026-01-11',
+    estado: 'ACTIVO',
+    installation_id: null,
+  },
 ];
 
 export const MOCK_DRIVERS = [
   {
-    id: 'COND-DEMO-001',
+    id: 1,
     rut: 'RUT DEMO 001',
     nombre_chofer: 'Conductor DEMO',
     apellido_chofer: '01',
@@ -56,16 +69,16 @@ export const MOCK_DRIVERS = [
     usuario_email: 'conductor-demo-01@example.test',
     estado: 'ACTIVO',
     biometria_activa: false,
-    usuario: 'USR-COND-DEMO-001',
-    licencia_id: 'LIC-DEMO-001',
-    vehiculo_id: 'VEH-DEMO-001',
+    usuario: 4,
+    licencia_id: 1,
+    vehiculo_id: 1,
   },
 ];
 
 export const MOCK_LICENSES = [
   {
-    id: 'LIC-DEMO-001',
-    conductor: 'Conductor DEMO 01',
+    id: 1,
+    conductor: 1,
     clase: 'A2',
     fecha_emision: '2024-01-01',
     comuna_emision: 'Comuna DEMO',
@@ -76,20 +89,20 @@ export const MOCK_LICENSES = [
 
 export const MOCK_VEHICLES = [
   {
-    id: 'VEH-DEMO-001',
+    id: 1,
     patente: 'DEMO-001',
     marca: 'Marca DEMO',
     modelo: 'Modelo DEMO',
     anio: 'DEMO',
     capacidad: 4,
     estado: 'ACTIVO (DEMO)',
-    conductor: 'Conductor DEMO 01',
+    conductor: 1,
     rutas: ['233003'],
   },
 ];
 
-export const MOCK_ROUTES = rutasConatacoch.map((ruta) => ({
-  id: `RUTA-${ruta.folio}`,
+export const MOCK_ROUTES = rutasConatacoch.map((ruta, index) => ({
+  id: index + 1,
   folio: ruta.folio,
   nombre: '',
   origen: '',
@@ -105,10 +118,10 @@ export const MOCK_ROUTES = rutasConatacoch.map((ruta) => ({
 
 export const MOCK_VEHICLE_ROUTES = [
   {
-    id: 'REL-DEMO-001',
-    vehiculo: 'VEH-DEMO-001',
+    id: 1,
+    vehiculo: 1,
     patente: 'DEMO-001',
-    ruta: 'RUTA-233003',
+    ruta: MOCK_ROUTES.find((route) => String(route.folio) === '233003')?.id || 1,
     folio: '233003',
     activo: true,
   },
@@ -116,11 +129,12 @@ export const MOCK_VEHICLE_ROUTES = [
 
 export const MOCK_REQUESTS = [
   {
-    id: 'SOL-DEMO-001',
+    id: 1,
+    usuario: 1,
     pasajero: 'Usuario DEMO 01',
-    vehiculo: 'VEH-DEMO-001',
+    vehiculo: 1,
     conductor: 'Conductor DEMO 01',
-    ruta: '233003',
+    ruta: MOCK_ROUTES.find((route) => String(route.folio) === '233003')?.id || 1,
     asientos: 1,
     fecha: '2026-01-11 09:00',
     hora: '09:00',
@@ -130,11 +144,12 @@ export const MOCK_REQUESTS = [
     estado: 'PENDIENTE',
   },
   {
-    id: 'SOL-DEMO-002',
+    id: 2,
+    usuario: 2,
     pasajero: 'Usuario temporal DEMO',
-    vehiculo: 'Sin asignar DEMO',
+    vehiculo: 1,
     conductor: 'Sin asignar DEMO',
-    ruta: 'No especificada',
+    ruta: MOCK_ROUTES.find((route) => String(route.folio) === '233003')?.id || 1,
     asientos: 2,
     fecha: '2026-01-11 09:15',
     hora: '09:15',
@@ -147,11 +162,11 @@ export const MOCK_REQUESTS = [
 
 export const MOCK_TRIPS = [
   {
-    id: 'VIAJE-DEMO-001',
-    solicitud: 'SOL-DEMO-001',
+    id: 1,
+    solicitud: 1,
     pasajero: 'Usuario DEMO 01',
     conductor: 'Conductor DEMO 01',
-    vehiculo: 'VEH-DEMO-001',
+    vehiculo: 1,
     ruta: '233003',
     asientos: 1,
     inicio: '2026-01-10 10:00',
@@ -165,10 +180,10 @@ export const MOCK_TRIPS = [
 
 export const MOCK_RATINGS = [
   {
-    id: 'CAL-DEMO-001',
-    viaje: 'VIAJE-DEMO-001',
-    usuario: 'Usuario DEMO 01',
-    conductor: 'Conductor DEMO 01',
+    id: 1,
+    viaje: 1,
+    usuario: 1,
+    conductor: 1,
     puntaje: 5,
     comentario: 'Comentario de demostración.',
     fecha: '2026-01-10',
@@ -184,7 +199,7 @@ export const MOCK_NOTIFICATIONS = [
     titulo: 'Aviso de demostración',
     detalle: 'Esta notificación es MOCK; no corresponde a una alerta real.',
     fecha: '2026-01-11',
-    estado: 'NO LEÍDA',
+    estado: 'NO_LEIDA',
   },
 ];
 

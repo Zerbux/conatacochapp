@@ -11,9 +11,18 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
 from pathlib import Path
+import os
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Match behavior can be tuned per deployment without changing application code.
+MATCH_MAX_ROUTE_DISTANCE_METERS = int(os.getenv('MATCH_MAX_ROUTE_DISTANCE_METERS', '1000'))
+MATCH_LOCATION_MAX_AGE_SECONDS = int(os.getenv('MATCH_LOCATION_MAX_AGE_SECONDS', '60'))
+MATCH_AVERAGE_SPEED_KMH = float(os.getenv('MATCH_AVERAGE_SPEED_KMH', '20'))
+MATCH_REFERENCE_FARE_CLP = os.getenv('MATCH_REFERENCE_FARE_CLP')
+if MATCH_REFERENCE_FARE_CLP is not None:
+    MATCH_REFERENCE_FARE_CLP = int(MATCH_REFERENCE_FARE_CLP)
 
 
 # Quick-start development settings - unsuitable for production

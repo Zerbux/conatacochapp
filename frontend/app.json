@@ -30,7 +30,7 @@
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "CONATACOCH utiliza tu ubicación mientras usas el mapa conductor."
+          "locationWhenInUsePermission": "CONATACOCH usa tu ubicación para encontrar colectivos y mostrar rutas mientras utilizas la app."
         }
       ],
       [

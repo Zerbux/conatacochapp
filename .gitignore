@@ -39,3 +39,6 @@ frontend/.env
 __pycache__/
 *.py[cod]
 
+# Original source workbook (routes are distributed as a compact JSON fixture)
+/Transporte Público - Julio 2026 (1).xlsx
+

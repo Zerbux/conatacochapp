@@ -63,7 +63,7 @@ class RequestAccess(BasePermission):
             return False
         if is_administrator(request.user) or request.method in SAFE_METHODS:
             return True
-        return request.method == 'POST' and request.user.tipo_usuario == 'REGISTRADO'
+        return request.method == 'POST' and request.user.tipo_usuario in ('TEMPORAL', 'REGISTRADO')
 
     def has_object_permission(self, request, view, obj):
         user = request.user
@@ -74,11 +74,16 @@ class RequestAccess(BasePermission):
         if request.method in SAFE_METHODS:
             return owns_request or assigned_driver
         if request.method in ('PUT', 'PATCH') and assigned_driver:
-            return request.data.get('estado') in ('ACEPTADA', 'RECHAZADA')
+            return (
+                obj.estado == 'PENDIENTE'
+                and set(request.data.keys()).issubset({'estado'})
+                and request.data.get('estado') in ('ACEPTADA', 'RECHAZADA')
+            )
         return (
             request.method in ('PUT', 'PATCH')
             and owns_request
             and obj.estado == 'PENDIENTE'
+            and set(request.data.keys()).issubset({'estado'})
             and request.data.get('estado') == 'CANCELADA'
         )
 

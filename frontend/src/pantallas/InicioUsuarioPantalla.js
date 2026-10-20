@@ -1,11 +1,14 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   StyleSheet, Text, View, TextInput, TouchableOpacity, ActivityIndicator,
-  useWindowDimensions, Platform, FlatList, Alert, Keyboard, Image
+  useWindowDimensions, Platform, Alert, Keyboard, Image
 } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_DEFAULT } from '../componentes/Mapa';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import { rutasConatacoch } from './rutasConatacoch';
+import { apiRequest } from '../servicios/apiService';
+import { createRecord, listRecords, updateRecord } from '../servicios/dataService';
+import { DEMO_MODE } from '../servicios/authService';
+import { getCurrentLocation, requestForegroundLocationPermission } from '../servicios/locationService';
 
 export default function InicioUsuarioPantalla({ usuarioActual }) {
   const { width } = useWindowDimensions();
@@ -15,36 +18,105 @@ export default function InicioUsuarioPantalla({ usuarioActual }) {
   const [puntoSeleccionado, setPuntoSeleccionado] = useState(null);
   const [rutaSugerida, setRutaSugerida] = useState(null);
   const [distanciaAprox, setDistanciaAprox] = useState(null);
+  const [matchData, setMatchData] = useState(null);
+  const [estadoMatch, setEstadoMatch] = useState('BUSCANDO_UBICACION');
+  const [errorUbicacion, setErrorUbicacion] = useState('');
+  const [asientos, setAsientos] = useState(1);
+  const [solicitudActual, setSolicitudActual] = useState(null);
+  const [enviandoSolicitud, setEnviandoSolicitud] = useState(false);
 
   const COLORES = { verde: '#149E2D', blanco: '#FFFFFF', negro: '#000000' };
   const REGION_LA_GRANJA = { latitude: -33.5385, longitude: -70.6278, latitudeDelta: 0.035, longitudeDelta: 0.035 };
 
-  const calcularDistanciaMetros = (lat1, lon1, lat2, lon2) => {
-    const R = 6371000;
-    const dLat = (lat2 - lat1) * (Math.PI / 180);
-    const dLon = (lon2 - lon1) * (Math.PI / 180);
-    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(lat1 * (Math.PI / 180)) * Math.cos(lat2 * (Math.PI / 180)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
-    return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
+  const buscarRutaMasCercana = async (latitude, longitude) => {
+    setPuntoSeleccionado({ latitude, longitude });
+    setEstadoMatch('BUSCANDO_RUTA');
+    setErrorUbicacion('');
+    try {
+      const result = await apiRequest(`/api/rutas/match/?latitude=${encodeURIComponent(latitude)}&longitude=${encodeURIComponent(longitude)}`);
+      setMatchData(result);
+      setRutaSugerida(result.ruta || null);
+      setDistanciaAprox(result.distancia_metros);
+      setEstadoMatch(!result.ruta ? 'SIN_RUTA' : result.vehiculos?.length ? 'ENCONTRADO' : 'SIN_VEHICULOS');
+      if (mapRef.current) mapRef.current.animateToRegion({ latitude, longitude, latitudeDelta: 0.015, longitudeDelta: 0.015 }, 800);
+    } catch (error) {
+      setMatchData(null);
+      setRutaSugerida(null);
+      setEstadoMatch('ERROR');
+      setErrorUbicacion(error.message || 'No se pudo buscar la ruta en el servidor.');
+    }
   };
 
-  const buscarRutaMasCercana = (latitude, longitude) => {
-    let mejorRuta = null;
-    let menorDistancia = Infinity;
-    rutasConatacoch.forEach((ruta) => {
-      const todosLosPuntos = [...(ruta.coordenadasIda || []), ...(ruta.coordenadasRegreso || [])];
-      todosLosPuntos.forEach((punto) => {
-        const d = calcularDistanciaMetros(latitude, longitude, punto.latitude, punto.longitude);
-        if (d < menorDistancia) { menorDistancia = d; mejorRuta = ruta; }
-      });
-    });
-    if (mejorRuta && menorDistancia !== Infinity) {
-      setPuntoSeleccionado({ latitude, longitude });
-      setRutaSugerida(mejorRuta);
-      setDistanciaAprox(Math.round(menorDistancia));
-      if (mapRef.current) {
-        mapRef.current.animateToRegion({ latitude, longitude, latitudeDelta: 0.015, longitudeDelta: 0.015 }, 800);
+  const solicitarUbicacion = async () => {
+    setEstadoMatch('BUSCANDO_UBICACION');
+    setErrorUbicacion('');
+    try {
+      const permission = await requestForegroundLocationPermission();
+      if (permission !== 'granted') {
+        setEstadoMatch('SIN_GPS');
+        setErrorUbicacion('Necesitamos tu ubicación para encontrar el colectivo más cercano. Puedes intentar nuevamente o seleccionar un punto en el mapa.');
+        return;
       }
+      const position = await getCurrentLocation();
+      await buscarRutaMasCercana(position.coords.latitude, position.coords.longitude);
+    } catch (error) {
+      setEstadoMatch('SIN_GPS');
+      setErrorUbicacion(error.message || 'No fue posible obtener tu ubicación. Selecciona un punto en el mapa.');
     }
+  };
+
+  useEffect(() => { solicitarUbicacion(); }, []);
+
+  useEffect(() => {
+    if (!solicitudActual) return undefined;
+    const poll = async () => {
+      try {
+        const requests = await listRecords('solicitudes');
+        const current = requests.find((item) => String(item.id) === String(solicitudActual.id));
+        if (current) setSolicitudActual(current);
+      } catch { /* se reintenta en el siguiente intervalo */ }
+    };
+    const timer = setInterval(poll, 3000);
+    return () => clearInterval(timer);
+  }, [solicitudActual?.id]);
+
+  const reservar = async () => {
+    const vehicle = matchData?.vehiculos?.[0];
+    if (!vehicle || !rutaSugerida || !puntoSeleccionado || enviandoSolicitud) return;
+    if (DEMO_MODE) {
+      Alert.alert('Modo demostración', 'Desactiva EXPO_PUBLIC_DEMO_MODE para crear solicitudes reales en PostgreSQL.');
+      return;
+    }
+    if (asientos > Number(vehicle.asientos_disponibles)) {
+      Alert.alert('Cupos insuficientes', 'El vehículo no tiene suficientes cupos disponibles.');
+      return;
+    }
+    setEnviandoSolicitud(true);
+    try {
+      const request = await createRecord('solicitudes', {
+        vehiculo: vehicle.id,
+        ruta: rutaSugerida.id,
+        cantidad_asientos: asientos,
+        latitud_recogida: puntoSeleccionado.latitude,
+        longitud_recogida: puntoSeleccionado.longitude,
+      });
+      setSolicitudActual(request);
+      setEstadoMatch('SOLICITUD_ENVIADA');
+    } catch (error) {
+      Alert.alert('No se pudo solicitar', error.message || 'Actualiza la búsqueda e intenta nuevamente.');
+      if (/cupo|disponible|actualizada/i.test(error.message || '')) buscarRutaMasCercana(puntoSeleccionado.latitude, puntoSeleccionado.longitude);
+    } finally {
+      setEnviandoSolicitud(false);
+    }
+  };
+
+  const cancelarSolicitud = async () => {
+    if (!solicitudActual) return;
+    try {
+      await updateRecord('solicitudes', solicitudActual.id, { estado: 'CANCELADA' });
+      setSolicitudActual(null);
+      setEstadoMatch(matchData?.vehiculos?.length ? 'ENCONTRADO' : 'SIN_VEHICULOS');
+    } catch (error) { Alert.alert('No se pudo cancelar', error.message); }
   };
 
   const handleMapPress = (e) => buscarRutaMasCercana(e.nativeEvent.coordinate.latitude, e.nativeEvent.coordinate.longitude);
@@ -53,14 +125,6 @@ export default function InicioUsuarioPantalla({ usuarioActual }) {
     if (!busqueda.trim()) { limpiarBusqueda(); return; }
     Keyboard.dismiss(); setBuscando(true);
     const texto = busqueda.trim();
-    const rutaPorFolio = rutasConatacoch.find((r) => String(r.folio) === texto);
-    
-    if (rutaPorFolio && rutaPorFolio.coordenadasIda?.length > 0) {
-      seleccionarRutaDirecta(rutaPorFolio);
-      setBuscando(false);
-      return;
-    }
-
     try {
       const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(texto + ', Santiago, Chile')}&limit=1`, { headers: { 'User-Agent': 'ConatacochApp/1.0' }});
       const data = await response.json();
@@ -73,17 +137,18 @@ export default function InicioUsuarioPantalla({ usuarioActual }) {
     }
   };
 
-  const seleccionarRutaDirecta = (ruta) => {
-    setRutaSugerida(ruta); setPuntoSeleccionado(null); setDistanciaAprox(null); setBusqueda('');
-    if (mapRef.current && ruta.coordenadasIda?.length > 0) {
-      mapRef.current.fitToCoordinates(ruta.coordenadasIda, { edgePadding: { top: 120, right: 60, bottom: 280, left: 60 }, animated: true });
-    }
-  };
-
   const limpiarBusqueda = () => {
-    setBusqueda(''); setPuntoSeleccionado(null); setRutaSugerida(null);
+    setBusqueda(''); setPuntoSeleccionado(null); setRutaSugerida(null); setMatchData(null); setDistanciaAprox(null);
+    setEstadoMatch('SIN_GPS');
+    setErrorUbicacion('Busca una dirección o toca el mapa para elegir el punto de recogida.');
     if (mapRef.current) mapRef.current.animateToRegion(REGION_LA_GRANJA, 800);
   };
+
+  const puntosIda = (rutaSugerida?.trazados || []).filter((p) => p.sentido === 'IDA').sort((a, b) => a.orden - b.orden)
+    .map((p) => ({ latitude: Number(p.latitud), longitude: Number(p.longitud) }));
+  const puntosRegreso = (rutaSugerida?.trazados || []).filter((p) => p.sentido === 'REGRESO').sort((a, b) => a.orden - b.orden)
+    .map((p) => ({ latitude: Number(p.latitud), longitude: Number(p.longitud) }));
+  const vehicle = matchData?.vehiculos?.find((item) => Number(item.asientos_disponibles) >= asientos) || matchData?.vehiculos?.[0];
 
   return (
     <View style={styles.container}>
@@ -107,9 +172,10 @@ export default function InicioUsuarioPantalla({ usuarioActual }) {
           initialRegion={REGION_LA_GRANJA} showsCompass={false} showsUserLocation={false} showsMyLocationButton={false}
           onPress={handleMapPress} mapType="standard"
         >
-          {rutaSugerida?.coordenadasIda?.length > 0 && <Polyline coordinates={rutaSugerida.coordenadasIda} strokeColor={rutaSugerida.color || COLORES.verde} strokeWidth={6} lineCap="round" lineJoin="round" />}
-          {rutaSugerida?.coordenadasRegreso?.length > 0 && <Polyline coordinates={rutaSugerida.coordenadasRegreso} strokeColor={rutaSugerida.color || COLORES.verde} strokeWidth={5} lineDashPattern={[6, 6]} lineCap="round" lineJoin="round" />}
+          {puntosIda.length > 1 && <Polyline coordinates={puntosIda} strokeColor={rutaSugerida.color || COLORES.verde} strokeWidth={6} lineCap="round" lineJoin="round" />}
+          {puntosRegreso.length > 1 && <Polyline coordinates={puntosRegreso} strokeColor={rutaSugerida.color || COLORES.verde} strokeWidth={5} lineDashPattern={[6, 6]} lineCap="round" lineJoin="round" />}
           {puntoSeleccionado && <Marker coordinate={puntoSeleccionado}><View style={styles.userPin}><Ionicons name="location" size={36} color="#D81B60" /></View></Marker>}
+          {(matchData?.vehiculos || []).map((item) => <Marker key={item.id} coordinate={{ latitude: item.latitud, longitude: item.longitud }} title={`${item.marca} ${item.modelo}`} description={`${item.distancia_metros} m`}><View style={styles.vehiclePin}><MaterialCommunityIcons name="taxi" size={22} color="#FFFFFF" /></View></Marker>)}
         </MapView>
 
         <View style={[styles.searchBar, { left: width * 0.04, right: width * 0.04 }]}>
@@ -118,39 +184,46 @@ export default function InicioUsuarioPantalla({ usuarioActual }) {
           {buscando ? <ActivityIndicator size="small" color={COLORES.verde} /> : rutaSugerida ? <TouchableOpacity onPress={limpiarBusqueda}><Ionicons name="close-circle" size={22} color="#888888" /></TouchableOpacity> : <TouchableOpacity onPress={handleBuscar}><Ionicons name="arrow-forward" size={20} color={COLORES.verde} /></TouchableOpacity>}
         </View>
 
-        <TouchableOpacity style={[styles.gpsButton, { right: width * 0.04, bottom: rutaSugerida ? 220 : 150 }]} onPress={() => mapRef.current?.animateToRegion(REGION_LA_GRANJA, 800)}>
+        <TouchableOpacity style={[styles.gpsButton, { right: width * 0.04, bottom: rutaSugerida ? 350 : 145 }]} onPress={solicitarUbicacion}>
           <MaterialCommunityIcons name="crosshairs-gps" size={24} color={COLORES.negro} />
         </TouchableOpacity>
 
-        {rutaSugerida ? (
-          <View style={[styles.cardReserva, { left: width * 0.035, right: width * 0.035 }]}>
-            <View style={styles.cardHeader}>
-              <Text style={styles.cardTag}>Ruta más cercana</Text>
-              <TouchableOpacity onPress={limpiarBusqueda}><Ionicons name="close-circle" size={24} color="#999999" /></TouchableOpacity>
-            </View>
-            <View style={styles.infoBlock}>
-              <Text style={styles.folioText}>Folio: {rutaSugerida.folio}</Text>
-              {distanciaAprox !== null && <Text style={styles.distanciaText}>Distancia aproximada: {distanciaAprox} m</Text>}
-            </View>
-            <TouchableOpacity style={styles.btnSolicitar}><Text style={styles.btnSolicitarText}>Solicitar colectivo</Text></TouchableOpacity>
+        <View style={[styles.cardReserva, { left: width * 0.035, right: width * 0.035 }]}>
+          <View style={styles.cardHeader}>
+            <Text style={styles.cardTag}>{solicitudActual?.estado === 'ACEPTADA' ? 'Solicitud aceptada' : solicitudActual?.estado === 'RECHAZADA' ? 'Solicitud rechazada' : vehicle ? 'Colectivo más cercano' : 'Tu búsqueda'}</Text>
+            {rutaSugerida ? <TouchableOpacity onPress={limpiarBusqueda}><Ionicons name="close-circle" size={24} color="#999999" /></TouchableOpacity> : null}
           </View>
-        ) : (
-          <View style={styles.legendContainer}>
-            <View style={styles.legendHeader}>
-              <Text style={styles.legendTitle}>Rutas rápidas disponibles</Text>
-              <Text style={styles.legendCount}>{rutasConatacoch.length}</Text>
+          {estadoMatch === 'BUSCANDO_UBICACION' || estadoMatch === 'BUSCANDO_RUTA' ? <View style={styles.matchMessage}><ActivityIndicator color={COLORES.verde} /><Text>Buscando ruta y colectivos...</Text></View> : null}
+          {errorUbicacion ? <Text style={styles.distanciaText}>{errorUbicacion}</Text> : null}
+          {rutaSugerida ? <>
+            <Text style={styles.folioText}>Línea {rutaSugerida.folio}</Text>
+            <Text style={styles.distanciaText}>{rutaSugerida.nombre} · {rutaSugerida.origen} ↔ {rutaSugerida.destino}</Text>
+            <Text style={styles.distanciaText}>Ruta a {distanciaAprox} m de tu ubicación</Text>
+          </> : null}
+          {rutaSugerida && !vehicle && estadoMatch === 'SIN_VEHICULOS' ? <Text style={styles.emptyMessage}>Encontramos tu ruta, pero por el momento no hay colectivos con GPS activo.</Text> : null}
+          {!rutaSugerida && estadoMatch === 'SIN_RUTA' ? <Text style={styles.emptyMessage}>No encontramos una ruta CONATACOCH cercana. Toca el mapa para elegir otro punto.</Text> : null}
+          {vehicle && !solicitudActual ? <>
+            <View style={styles.vehicleDetails}>
+              {(matchData?.vehiculos?.length || 0) > 1 ? <Text style={styles.distanciaText}>{matchData.vehiculos.length} colectivos activos · mostrando el más cercano con {asientos} cupo(s)</Text> : null}
+              <Text style={styles.folioText}>{vehicle.eta_minutos} min aprox. · {vehicle.distancia_metros} m</Text>
+              <Text style={styles.distanciaText}>{vehicle.conductor_nombre || 'Conductor CONATACOCH'}</Text>
+              <Text style={styles.distanciaText}>{vehicle.marca} {vehicle.modelo} · {vehicle.patente}</Text>
+              <Text style={styles.distanciaText}>{vehicle.asientos_disponibles} cupos disponibles</Text>
+              {matchData?.tarifa_referencial_clp != null ? <Text style={styles.distanciaText}>Tarifa referencial · ${Number(matchData.tarifa_referencial_clp).toLocaleString('es-CL')} CLP</Text> : <Text style={styles.distanciaText}>Tarifa referencial no informada</Text>}
             </View>
-            <FlatList
-              horizontal data={rutasConatacoch} keyExtractor={(item) => String(item.folio)} showsHorizontalScrollIndicator={false}
-              renderItem={({ item }) => (
-                <TouchableOpacity style={styles.legendChip} onPress={() => seleccionarRutaDirecta(item)}>
-                  <View style={[styles.legendColorDot, { backgroundColor: item.color || COLORES.verde }]} />
-                  <Text style={styles.legendChipText}>{item.folio}</Text>
-                </TouchableOpacity>
-              )}
-            />
-          </View>
-        )}
+            <Text style={styles.seatLabel}>Asientos que necesitas</Text>
+            <View style={styles.seatSelector}>{[1, 2, 3, 4].map((count) => <TouchableOpacity key={count} onPress={() => setAsientos(count)} style={[styles.seatOption, asientos === count && styles.seatOptionActive]}><Text style={[styles.seatOptionText, asientos === count && styles.seatOptionTextActive]}>{count}</Text></TouchableOpacity>)}</View>
+            {asientos > Number(vehicle.asientos_disponibles) ? <Text style={styles.seatError}>El vehículo no tiene suficientes cupos disponibles.</Text> : null}
+            <TouchableOpacity disabled={enviandoSolicitud || asientos > Number(vehicle.asientos_disponibles)} style={[styles.btnSolicitar, (enviandoSolicitud || asientos > Number(vehicle.asientos_disponibles)) && styles.disabledButton]} onPress={reservar}><Text style={styles.btnSolicitarText}>{enviandoSolicitud ? 'Enviando...' : 'Reservar colectivo'}</Text></TouchableOpacity>
+          </> : null}
+          {solicitudActual ? <>
+            <Text style={styles.distanciaText}>Ruta {solicitudActual.ruta_folio || rutaSugerida?.folio} · {solicitudActual.asientos || solicitudActual.cantidad_asientos} asiento(s)</Text>
+            {solicitudActual.estado === 'PENDIENTE' ? <><Text style={styles.pendingMessage}>Esperando respuesta del conductor...</Text><TouchableOpacity style={styles.cancelButton} onPress={cancelarSolicitud}><Text style={styles.cancelText}>Cancelar solicitud</Text></TouchableOpacity></> : null}
+            {solicitudActual.estado === 'ACEPTADA' ? <Text style={styles.acceptedMessage}>¡Tu colectivo viene en camino! {vehicle?.conductor_nombre || ''} · {vehicle?.marca} {vehicle?.modelo} · {vehicle?.patente}</Text> : null}
+            {solicitudActual.estado === 'RECHAZADA' ? <><Text style={styles.seatError}>El conductor no pudo aceptar esta solicitud.</Text><TouchableOpacity style={styles.cancelButton} onPress={() => { setSolicitudActual(null); buscarRutaMasCercana(puntoSeleccionado.latitude, puntoSeleccionado.longitude); }}><Text style={styles.cancelText}>Buscar otro colectivo</Text></TouchableOpacity></> : null}
+          </> : null}
+          {estadoMatch === 'SIN_GPS' || estadoMatch === 'ERROR' ? <TouchableOpacity style={styles.retryButton} onPress={solicitarUbicacion}><Text style={styles.retryText}>Intentar nuevamente</Text></TouchableOpacity> : null}
+        </View>
       </View>
     </View>
   );
@@ -165,22 +238,32 @@ const styles = StyleSheet.create({
   mapContainer: { flex: 1, backgroundColor: '#E5E3DF' },
   map: { width: '100%', height: '100%' },
   userPin: { alignItems: 'center', justifyContent: 'center' },
+  vehiclePin: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#149E2D', borderWidth: 2, borderColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center', elevation: 5 },
   searchBar: { position: 'absolute', top: 14, height: 50, backgroundColor: '#FFFFFF', borderRadius: 25, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, elevation: 6 },
   searchInput: { flex: 1, height: '100%', fontSize: 13, color: '#000000', marginLeft: 8 },
   gpsButton: { position: 'absolute', width: 46, height: 46, borderRadius: 23, backgroundColor: '#FFFFFF', justifyContent: 'center', alignItems: 'center', elevation: 6 },
   cardReserva: { position: 'absolute', bottom: 80, backgroundColor: '#FFFFFF', borderRadius: 16, padding: 16, elevation: 8 },
   cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
   cardTag: { fontSize: 12, fontWeight: '700', color: '#149E2D', textTransform: 'uppercase' },
-  infoBlock: { marginBottom: 14 },
   folioText: { fontSize: 20, fontWeight: '800', color: '#000000' },
   distanciaText: { fontSize: 14, color: '#555555', marginTop: 2 },
   btnSolicitar: { backgroundColor: '#149E2D', borderRadius: 10, paddingVertical: 12, alignItems: 'center' },
   btnSolicitarText: { color: '#FFFFFF', fontSize: 15, fontWeight: '700' },
-  legendContainer: { position: 'absolute', left: 12, right: 12, bottom: 80, backgroundColor: '#FFFFFF', borderRadius: 14, padding: 10, elevation: 5 },
-  legendHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
-  legendTitle: { fontSize: 12, fontWeight: '700', color: '#000000' },
-  legendCount: { fontSize: 11, color: '#777777', fontWeight: '600' },
-  legendChip: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#F2F2F2', borderRadius: 12, paddingHorizontal: 10, paddingVertical: 6, marginRight: 8 },
-  legendColorDot: { width: 8, height: 8, borderRadius: 4, marginRight: 6 },
-  legendChipText: { fontSize: 11, color: '#333333', fontWeight: '700' }
+  matchMessage: { flexDirection: 'row', gap: 10, alignItems: 'center', paddingVertical: 7 },
+  emptyMessage: { color: '#555555', fontSize: 13, lineHeight: 19, marginVertical: 8 },
+  vehicleDetails: { borderTopWidth: 1, borderTopColor: '#EEEEEE', marginTop: 8, paddingTop: 8, gap: 3 },
+  seatLabel: { color: '#333333', fontSize: 12, fontWeight: '700', marginTop: 10, marginBottom: 6 },
+  seatSelector: { flexDirection: 'row', gap: 8, marginBottom: 9 },
+  seatOption: { width: 38, height: 34, borderRadius: 17, backgroundColor: '#F0F2F0', alignItems: 'center', justifyContent: 'center' },
+  seatOptionActive: { backgroundColor: '#149E2D' },
+  seatOptionText: { color: '#333333', fontWeight: '800' },
+  seatOptionTextActive: { color: '#FFFFFF' },
+  seatError: { color: '#B00020', fontSize: 12, marginBottom: 7 },
+  disabledButton: { opacity: 0.55 },
+  pendingMessage: { color: '#8A5B00', fontWeight: '700', marginTop: 8 },
+  acceptedMessage: { color: '#149E2D', fontWeight: '800', lineHeight: 20, marginVertical: 8 },
+  cancelButton: { minHeight: 40, alignItems: 'center', justifyContent: 'center' },
+  cancelText: { color: '#555555', fontWeight: '700', textDecorationLine: 'underline' },
+  retryButton: { padding: 10, alignItems: 'center' },
+  retryText: { color: '#149E2D', fontWeight: '800' },
 });

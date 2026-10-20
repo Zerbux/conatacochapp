@@ -24,7 +24,7 @@ class Command(BaseCommand):
             identifier='COND-DEMO-SEED',
             role='CONDUCTOR',
         )
-        self._ensure_user(
+        admin_user, admin_password = self._ensure_user(
             email='admin.demo@example.test',
             identifier='ADMIN-DEMO-SEED',
             role='ADMIN',
@@ -80,14 +80,26 @@ class Command(BaseCommand):
             },
         )
         VehiculoRuta.objects.get_or_create(vehiculo=vehicle, ruta=route)
+        official_route = Ruta.objects.filter(
+            descripcion__startswith='Calles y orden importados del Excel oficial de La Granja.'
+        ).order_by('folio').first()
+        if official_route:
+            VehiculoRuta.objects.get_or_create(
+                vehiculo=vehicle,
+                ruta=official_route,
+                defaults={'activo': True},
+            )
+        official_route_suffix = f', ruta oficial #{official_route.pk}' if official_route else ''
 
         self.stdout.write(self.style.SUCCESS(
             f'Datos demo listos: usuario pasajero #{passenger.pk}, conductor #{driver.pk}, '
-            f'vehículo #{vehicle.pk}, ruta #{route.pk}. No se crearon solicitudes ni coordenadas ficticias.'
+            f'vehículo #{vehicle.pk}, ruta demo #{route.pk}{official_route_suffix}. '
+            'No se crearon solicitudes ni coordenadas ficticias.'
         ))
         for label, email, password in (
             ('Pasajero', passenger.email, passenger_password),
             ('Conductor', driver_user.email, driver_password),
+            ('Administrador', admin_user.email, admin_password),
         ):
             if password:
                 self.stdout.write(f'Contraseña inicial de {label} ({email}): {password}')

@@ -172,7 +172,10 @@ class SolicitudSerializer(serializers.ModelSerializer):
     )
     ruta_nombre = serializers.ReadOnlyField(source='ruta.nombre')
     ruta_folio = serializers.ReadOnlyField(source='ruta.folio')
+    ruta_origen = serializers.ReadOnlyField(source='ruta.origen')
+    ruta_destino = serializers.ReadOnlyField(source='ruta.destino')
     usuario_identificador = serializers.ReadOnlyField(source='usuario.identificador')
+    usuario_tipo = serializers.ReadOnlyField(source='usuario.tipo_usuario')
     pasajero = serializers.SerializerMethodField()
     conductor = serializers.SerializerMethodField()
     asientos = serializers.IntegerField(source='cantidad_asientos', required=False)
@@ -180,7 +183,10 @@ class SolicitudSerializer(serializers.ModelSerializer):
     fecha = serializers.DateTimeField(source='fecha_solicitud', read_only=True)
 
     def get_pasajero(self, solicitud):
-        return f"{solicitud.usuario.nombre_usuario} {solicitud.usuario.apellido_usuario}".strip()
+        name = f"{solicitud.usuario.nombre_usuario} {solicitud.usuario.apellido_usuario}".strip()
+        if name:
+            return name
+        return 'Usuario temporal' if solicitud.usuario.tipo_usuario == 'TEMPORAL' else 'Pasajero'
 
     def get_conductor(self, solicitud):
         conductor = solicitud.vehiculo.conductor
@@ -192,8 +198,8 @@ class SolicitudSerializer(serializers.ModelSerializer):
     class Meta:
         model = Solicitud
         fields = [
-            'id', 'usuario', 'usuario_identificador', 'pasajero', 'vehiculo',
-            'conductor', 'ruta', 'ruta_nombre', 'ruta_folio', 'cantidad_asientos',
+            'id', 'usuario', 'usuario_identificador', 'usuario_tipo', 'pasajero', 'vehiculo',
+            'conductor', 'ruta', 'ruta_nombre', 'ruta_folio', 'ruta_origen', 'ruta_destino', 'cantidad_asientos',
             'asientos', 'latitud_recogida', 'longitud_recogida', 'puntoRecogida',
             'fecha_solicitud', 'fecha', 'estado',
         ]

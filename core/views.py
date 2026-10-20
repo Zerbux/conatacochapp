@@ -1,10 +1,14 @@
 import secrets
+import math
+from datetime import timedelta
 
 from django.contrib.auth import authenticate
+from django.conf import settings
 from django.db import transaction
-from django.db.models import Prefetch, Q
+from django.db.models import Avg, Prefetch, Q
 from django.utils import timezone
 from rest_framework import serializers, status, views, viewsets
+from rest_framework.decorators import action
 from rest_framework.authentication import TokenAuthentication
 from rest_framework.authtoken.models import Token
 from rest_framework.permissions import AllowAny
@@ -112,6 +116,88 @@ class RutaViewSet(viewsets.ModelViewSet):
     serializer_class = RutaSerializer
     permission_classes = [AdminOrAuthenticatedRead]
 
+    @action(detail=False, methods=['get'], url_path='match')
+    def match(self, request):
+        try:
+            latitude = float(request.query_params['latitude'])
+            longitude = float(request.query_params['longitude'])
+        except (KeyError, TypeError, ValueError):
+            return Response({'detail': 'Debes enviar latitude y longitude válidas.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
+            return Response({'detail': 'Las coordenadas están fuera de rango.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        max_route_distance = getattr(settings, 'MATCH_MAX_ROUTE_DISTANCE_METERS', 1000)
+        max_location_age = getattr(settings, 'MATCH_LOCATION_MAX_AGE_SECONDS', 60)
+        average_speed_kmh = max(1, getattr(settings, 'MATCH_AVERAGE_SPEED_KMH', 20))
+
+        def distance_m(lat1, lon1, lat2, lon2):
+            radius = 6371000
+            d_lat = math.radians(lat2 - lat1)
+            d_lon = math.radians(lon2 - lon1)
+            value = (math.sin(d_lat / 2) ** 2 + math.cos(math.radians(lat1)) *
+                     math.cos(math.radians(lat2)) * math.sin(d_lon / 2) ** 2)
+            return radius * 2 * math.atan2(math.sqrt(value), math.sqrt(1 - value))
+
+        routes = Ruta.objects.filter(estado='ACTIVA').prefetch_related('trazados').all()
+        best_route, best_distance = None, float('inf')
+        for route in routes:
+            points = list(route.trazados.all())
+            if not points:
+                continue
+            route_distance = min(
+                distance_m(latitude, longitude, float(point.latitud), float(point.longitud))
+                for point in points
+            )
+            if route_distance < best_distance:
+                best_route, best_distance = route, route_distance
+        if best_route is None or best_distance > max_route_distance:
+            return Response({'ruta': None, 'distancia_metros': None, 'vehiculos': [], 'radio_maximo_metros': max_route_distance})
+
+        assignments = VehiculoRuta.objects.filter(ruta=best_route, activo=True).select_related(
+            'vehiculo', 'vehiculo__conductor'
+        ).filter(
+            vehiculo__en_servicio=True,
+            vehiculo__estado='ACTIVO',
+            vehiculo__asientos_disponibles__gt=0,
+            vehiculo__conductor__isnull=False,
+        )
+        cutoff = timezone.now() - timedelta(seconds=max_location_age)
+        candidates = []
+        for assignment in assignments:
+            vehicle = assignment.vehiculo
+            latest = vehicle.ubicaciones.order_by('-fecha_hora', '-pk').first()
+            if not latest or not latest.activo or latest.fecha_hora < cutoff:
+                continue
+            vehicle_distance = distance_m(latitude, longitude, float(latest.latitud), float(latest.longitud))
+            conductor = vehicle.conductor
+            rating = Calificacion.objects.filter(conductor=conductor).aggregate(promedio=Avg('puntaje'))['promedio']
+            candidates.append({
+                'id': vehicle.pk,
+                'patente': vehicle.patente,
+                'marca': vehicle.marca,
+                'modelo': vehicle.modelo,
+                'capacidad': vehicle.capacidad,
+                'asientos_disponibles': vehicle.asientos_disponibles,
+                'conductor_id': conductor.pk,
+                'conductor_nombre': f'{conductor.nombre_chofer} {conductor.apellido_chofer}'.strip() or None,
+                'latitud': float(latest.latitud),
+                'longitud': float(latest.longitud),
+                'fecha_hora': latest.fecha_hora,
+                'distancia_metros': round(vehicle_distance),
+                'eta_minutos': max(1, round(vehicle_distance / (average_speed_kmh * 1000 / 60))),
+                'calificacion_promedio': round(rating, 1) if rating is not None else None,
+                'cantidad_viajes': Viaje.objects.filter(solicitud__vehiculo=vehicle, estado='FINALIZADO').count(),
+            })
+        candidates.sort(key=lambda item: item['distancia_metros'])
+        return Response({
+            'ruta': RutaSerializer(best_route).data,
+            'distancia_metros': round(best_distance),
+            'vehiculos': candidates,
+            'radio_maximo_metros': max_route_distance,
+            'ubicacion_maxima_antiguedad_segundos': max_location_age,
+            'tarifa_referencial_clp': getattr(settings, 'MATCH_REFERENCE_FARE_CLP', None),
+        })
+
 
 class TrazadoRutaViewSet(viewsets.ModelViewSet):
     queryset = TrazadoRuta.objects.select_related('ruta').all()
@@ -168,16 +254,47 @@ class SolicitudViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         if is_admin_user(self.request.user):
             serializer.save()
-        else:
-            serializer.save(usuario=self.request.user)
+            return
+        user = self.request.user
+        if user.tipo_usuario not in ('TEMPORAL', 'REGISTRADO'):
+            raise PermissionDenied('Solo pasajeros pueden crear solicitudes.')
+        data = serializer.validated_data
+        vehicle = data['vehiculo']
+        route = data['ruta']
+        seats = data.get('cantidad_asientos', 1)
+        if not VehiculoRuta.objects.filter(vehiculo=vehicle, ruta=route, activo=True).exists():
+            raise serializers.ValidationError({'vehiculo': 'El vehículo no está asociado a esta ruta.'})
+        if not vehicle.en_servicio or vehicle.estado != 'ACTIVO':
+            raise serializers.ValidationError({'vehiculo': 'El vehículo ya no está disponible.'})
+        max_age = getattr(settings, 'MATCH_LOCATION_MAX_AGE_SECONDS', 60)
+        newest_location = vehicle.ubicaciones.order_by('-fecha_hora', '-pk').first()
+        if (not newest_location or not newest_location.activo or
+                newest_location.fecha_hora < timezone.now() - timedelta(seconds=max_age)):
+            raise serializers.ValidationError({'vehiculo': 'La ubicación del vehículo ya no está actualizada.'})
+        with transaction.atomic():
+            locked_vehicle = Vehiculo.objects.select_for_update().select_related('conductor__usuario').get(pk=vehicle.pk)
+            if seats < 1 or seats > 4 or locked_vehicle.asientos_disponibles < seats:
+                raise serializers.ValidationError({'vehiculo': 'El vehículo no tiene suficientes cupos disponibles.'})
+            solicitud = serializer.save(usuario=user, estado='PENDIENTE')
+            if locked_vehicle.conductor_id:
+                Notificacion.objects.create(
+                    usuario=locked_vehicle.conductor.usuario,
+                    tipo='SOLICITUD',
+                    titulo='Nueva solicitud de viaje',
+                    detalle=f'Solicitud #{solicitud.pk}: {seats} asiento(s), ruta {route.folio}.',
+                )
 
     def perform_update(self, serializer):
         with transaction.atomic():
-            old_state = serializer.instance.estado
+            locked_request = Solicitud.objects.select_for_update().get(pk=serializer.instance.pk)
+            serializer.instance = locked_request
+            old_state = locked_request.estado
             next_state = serializer.validated_data.get('estado', old_state)
+            if old_state != 'PENDIENTE' or next_state not in ('ACEPTADA', 'RECHAZADA', 'CANCELADA'):
+                raise serializers.ValidationError({'estado': 'Solo una solicitud pendiente puede cambiar de estado.'})
             if next_state == 'ACEPTADA' and old_state != 'ACEPTADA':
-                vehicle = Vehiculo.objects.select_for_update().get(pk=serializer.instance.vehiculo_id)
-                seats = serializer.instance.cantidad_asientos
+                vehicle = Vehiculo.objects.select_for_update().get(pk=locked_request.vehiculo_id)
+                seats = locked_request.cantidad_asientos
                 if not vehicle.en_servicio or vehicle.asientos_disponibles < seats:
                     raise serializers.ValidationError({
                         'estado': 'El vehículo ya no tiene servicio activo o suficientes asientos disponibles.'
@@ -198,7 +315,14 @@ class SolicitudViewSet(viewsets.ModelViewSet):
                     detalle=f'El conductor aceptó la solicitud #{solicitud.pk}.',
                 )
             else:
-                serializer.save()
+                solicitud = serializer.save()
+                if next_state in ('RECHAZADA', 'CANCELADA'):
+                    Notificacion.objects.create(
+                        usuario=solicitud.usuario,
+                        tipo='SOLICITUD',
+                        titulo='Solicitud actualizada',
+                        detalle=f'La solicitud #{solicitud.pk} fue {next_state.lower()}.',
+                    )
 
 
 class ViajeViewSet(viewsets.ModelViewSet):

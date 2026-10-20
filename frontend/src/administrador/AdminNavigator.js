@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   FlatList,
@@ -15,6 +15,7 @@ import { Ionicons } from '@expo/vector-icons';
 import MapView, { Marker, Polyline, PROVIDER_DEFAULT } from '../componentes/Mapa';
 import {
   COLORES,
+  ConfirmModal,
   DataCard,
   DemoBanner,
   DangerButton,
@@ -230,6 +231,8 @@ const CATEGORY_MODULES = {
   sistema: ['reportes', 'perfil', 'configuracion'],
 };
 
+const REPORT_COLLECTIONS = ['conductores', 'vehiculos', 'solicitudes', 'viajes', 'calificaciones', 'emergencias', 'rutas'];
+
 const RELATION_FIELDS = {
   conductores: { usuario: 'usuarios' },
   licencias: { conductor: 'conductores' },
@@ -253,6 +256,8 @@ function getRelationLabel(collection, item) {
   if (collection === 'solicitudes') return `Solicitud ${item.id} · ${item.estado}`;
   return `ID ${item.id}`;
 }
+
+const toReferenceId = (value) => (DEMO_MODE ? value : Number(value));
 
 const MENU_ITEMS = [
   { id: 'dashboard', label: 'Dashboard', icon: 'grid-outline', group: 'OPERACIÓN' },
@@ -339,9 +344,12 @@ function AdminLoginScreen({ onSuccess, onBack }) {
 function AdminDashboardScreen({ onOpen }) {
   const [counts, setCounts] = useState({});
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    Promise.all(Object.entries({
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    const requestedCollections = Object.entries({
       usuarios: 'usuarios',
       conductores: 'conductores',
       vehiculos: 'vehiculos',
@@ -350,28 +358,30 @@ function AdminDashboardScreen({ onOpen }) {
       viajes: 'viajes',
       emergencias: 'emergencias',
       calificaciones: 'calificaciones',
-    }).map(async ([key, collection]) => [key, await listRecords(collection)]))
-      .then((entries) => {
-        const collections = Object.fromEntries(entries);
-        return [
-          ['usuarios', collections.usuarios.length],
-          ['usuariosTemporales', collections.usuarios.filter((item) => item.tipo === 'TEMPORAL' || item.tipo_usuario === 'TEMPORAL').length],
-          ['conductores', collections.conductores.length],
-          ['vehiculos', collections.vehiculos.length],
-          ['rutas', collections.rutas.length],
-          ['solicitudesPendientes', collections.solicitudes.filter((item) => item.estado === 'PENDIENTE').length],
-          ['viajesActivos', collections.viajes.filter((item) => item.estado === 'EN_CURSO').length],
-          ['emergencias', collections.emergencias.length],
-          ['calificaciones', collections.calificaciones.length],
-        ];
-      })
-      .then((entries) => setCounts(Object.fromEntries(entries)))
-      .catch((loadError) => setError(loadError.message));
+    });
+    const results = await Promise.allSettled(requestedCollections.map(async ([key, collection]) => [key, await listRecords(collection)]));
+    const collections = {};
+    const failed = [];
+    results.forEach((result, index) => {
+      if (result.status === 'fulfilled') collections[result.value[0]] = result.value[1];
+      else failed.push(requestedCollections[index][0]);
+    });
+    setCounts({
+      usuarios: collections.usuarios?.length,
+      usuariosTemporales: collections.usuarios?.filter((item) => item.tipo === 'TEMPORAL' || item.tipo_usuario === 'TEMPORAL').length,
+      conductores: collections.conductores?.length,
+      vehiculos: collections.vehiculos?.length,
+      rutas: collections.rutas?.length,
+      solicitudesPendientes: collections.solicitudes?.filter((item) => item.estado === 'PENDIENTE').length,
+      viajesActivos: collections.viajes?.filter((item) => item.estado === 'EN_CURSO').length,
+      emergencias: collections.emergencias?.length,
+      calificaciones: collections.calificaciones?.length,
+    });
+    setError(failed.length ? `No se pudieron cargar: ${failed.join(', ')}.` : '');
+    setLoading(false);
   }, []);
 
-  if (error) {
-    return <Page title="Dashboard"><Text accessibilityRole="alert" style={styles.error}>{error}</Text></Page>;
-  }
+  useEffect(() => { Promise.resolve().then(load); }, [load]);
 
   const cards = [
     ['Usuarios', counts.usuarios, 'people-outline', 'usuarios'],
@@ -388,6 +398,13 @@ function AdminDashboardScreen({ onOpen }) {
   return (
     <Page title="Dashboard" subtitle="Resumen de la consola administrativa">
       <DemoBanner>{DEMO_MODE ? 'Indicadores MOCK; no representan operaciones reales.' : 'Indicadores consultados al servidor.'}</DemoBanner>
+      {loading ? <Text style={styles.loadingText}>Cargando resumen...</Text> : null}
+      {error ? (
+        <View>
+          <Text accessibilityRole="alert" style={styles.error}>{error}</Text>
+          <SecondaryButton title="Reintentar carga del resumen" icon="refresh-outline" onPress={load} />
+        </View>
+      ) : null}
       <View style={styles.statsGrid}>
         {cards.map(([label, value, icon, screen]) => (
           <StatCard
@@ -544,7 +561,7 @@ function RecordForm({ visible, module, record, onCancel, onSave }) {
         setError('La clase de licencia debe ser A2 o A3.');
         return;
       }
-      if (!/^\d+$/.test(String(values.conductor))) {
+      if (!DEMO_MODE && !/^\d+$/.test(String(values.conductor))) {
         setError('Selecciona el ID numérico de un conductor existente.');
         return;
       }
@@ -567,7 +584,8 @@ function RecordForm({ visible, module, record, onCancel, onSave }) {
         setError('La cantidad de pasajeros debe estar entre 1 y 4.');
         return;
       }
-      if (!['usuario', 'vehiculo', 'ruta', 'latitud_recogida', 'longitud_recogida'].every((key) => Number.isFinite(Number(values[key])))) {
+      if (!['latitud_recogida', 'longitud_recogida'].every((key) => Number.isFinite(Number(values[key]))) ||
+          (!DEMO_MODE && !['usuario', 'vehiculo', 'ruta'].every((key) => Number.isInteger(Number(values[key]))))) {
         setError('Pasajero, vehículo, ruta y coordenadas deben ser valores numéricos válidos.');
         return;
       }
@@ -604,28 +622,28 @@ function RecordForm({ visible, module, record, onCancel, onSave }) {
           if (payload[key] === '') delete payload[key];
           else payload[key] = String(payload[key]).toLowerCase() === 'true';
         }
-        if (payload.conductor) payload.conductor = Number(payload.conductor);
+        if (payload.conductor) payload.conductor = toReferenceId(payload.conductor);
         else delete payload.conductor;
       }
       if (module.collection === 'conductores') payload.biometria_activa = String(payload.biometria_activa).toLowerCase() === 'true';
-      if (module.collection === 'conductores') payload.usuario = Number(payload.usuario);
-      if (module.collection === 'licencias') payload.conductor = Number(payload.conductor);
+      if (module.collection === 'conductores') payload.usuario = toReferenceId(payload.usuario);
+      if (module.collection === 'licencias') payload.conductor = toReferenceId(payload.conductor);
       if (module.collection === 'vehiculoRuta') {
-        payload.vehiculo = Number(payload.vehiculo);
-        payload.ruta = Number(payload.ruta);
+        payload.vehiculo = toReferenceId(payload.vehiculo);
+        payload.ruta = toReferenceId(payload.ruta);
         payload.activo = String(payload.activo).toLowerCase() !== 'false';
       }
       if (module.collection === 'solicitudes') {
-        payload.usuario = Number(payload.usuario);
-        payload.vehiculo = Number(payload.vehiculo);
-        payload.ruta = Number(payload.ruta);
+        payload.usuario = toReferenceId(payload.usuario);
+        payload.vehiculo = toReferenceId(payload.vehiculo);
+        payload.ruta = toReferenceId(payload.ruta);
         payload.asientos = Number(payload.asientos);
         payload.latitud_recogida = Number(payload.latitud_recogida);
         payload.longitud_recogida = Number(payload.longitud_recogida);
       }
-      if (module.collection === 'viajes' && payload.solicitud) payload.solicitud = Number(payload.solicitud);
+      if (module.collection === 'viajes' && payload.solicitud) payload.solicitud = toReferenceId(payload.solicitud);
       if (module.collection === 'trazadosRuta') {
-        payload.ruta = Number(payload.ruta);
+        payload.ruta = toReferenceId(payload.ruta);
         payload.sentido = String(payload.sentido).toUpperCase();
         payload.orden = Number(payload.orden);
         payload.latitud = Number(payload.latitud);
@@ -633,7 +651,7 @@ function RecordForm({ visible, module, record, onCancel, onSave }) {
       }
       if (module.collection === 'emergencias') {
         for (const key of ['conductor', 'vehiculo']) {
-          if (payload[key]) payload[key] = Number(payload[key]);
+          if (payload[key]) payload[key] = toReferenceId(payload[key]);
           else delete payload[key];
         }
         for (const key of ['latitud', 'longitud']) {
@@ -740,15 +758,43 @@ function RecordForm({ visible, module, record, onCancel, onSave }) {
   );
 }
 
-function RecordCard({ item, module, onOpen, onEdit, onToggle, onAction }) {
+function RecordCard({ item, module, licenseDriverName, onOpen, onEdit, onToggle, onAction }) {
   const driverName = [item.nombre_chofer, item.apellido_chofer].filter(Boolean).join(' ');
   const userName = [item.nombre_usuario, item.apellido_usuario].filter(Boolean).join(' ');
-  const title = module.collection === 'conductores'
-    ? driverName || item.nombre || item.rut || item.id
-    : module.collection === 'usuarios'
-      ? userName || item.nombre || item.identificador || item.id
-      : item.nombre || item.titulo || item.folio || item.patente || item.rut || item.id;
-  const secondary = item.usuario_email || item.email || item.correo || item.estado || item.tipo_usuario || item.tipo || item.ruta || item.comuna || '';
+  const titles = {
+    usuarios: userName || item.nombre || item.identificador || `Usuario #${item.id}`,
+    conductores: driverName || item.nombre || item.rut || `Conductor #${item.id}`,
+    licencias: `Licencia ${item.clase || ''}`.trim(),
+    vehiculos: item.patente || `Vehiculo #${item.id}`,
+    rutas: item.nombre || `Ruta ${item.folio || item.id}`,
+    trazadosRuta: item.calle || `Punto #${item.orden || item.id}`,
+    vehiculoRuta: item.patente ? `${item.patente} · Ruta ${item.folio || item.ruta}` : `Asignacion #${item.id}`,
+    solicitudes: `Solicitud #${item.id}`,
+    viajes: `Viaje #${item.id}`,
+    ubicaciones: item.patente ? `Vehiculo ${item.patente}` : `Ubicacion #${item.id}`,
+    calificaciones: `Calificacion ${item.puntaje ?? 'sin puntaje'}/5`,
+    emergencias: `Emergencia #${item.id}`,
+    notificaciones: item.titulo || `Notificacion #${item.id}`,
+  };
+  const secondaryValues = {
+    usuarios: [item.email || item.correo, item.tipo_usuario, item.estado],
+    conductores: [item.usuario_email, item.comuna, item.licencia_clase ? `Licencia ${item.licencia_clase}` : null, item.estado],
+    licencias: [licenseDriverName || `Conductor #${item.conductor}`, `Vence ${item.fecha_vencimiento || 'sin fecha'}`, item.estado],
+    vehiculos: [item.marca, item.modelo, item.conductor_nombre, item.estado],
+    rutas: [item.origen, item.destino, item.estado],
+    trazadosRuta: [`${item.sentido || ''} · orden ${item.orden ?? ''}`, `Ruta #${item.ruta}`],
+    vehiculoRuta: [`Folio ${item.folio || item.ruta}`, item.activo === false ? 'INACTIVA' : 'ACTIVA'],
+    solicitudes: [item.pasajero, item.ruta_nombre || (item.ruta ? `Ruta #${item.ruta}` : null), item.estado],
+    viajes: [item.pasajero, item.conductor, item.estado],
+    ubicaciones: [item.fecha_hora, item.latitud != null && item.longitud != null ? `${item.latitud}, ${item.longitud}` : null],
+    calificaciones: [item.conductor ? `Conductor #${item.conductor}` : null, item.fecha, item.comentario],
+    emergencias: [item.conductor_nombre || (item.conductor ? `Conductor #${item.conductor}` : null), item.fecha_hora, item.estado],
+    notificaciones: [item.tipo, item.fecha || item.fecha_hora, item.estado],
+  };
+  const title = titles[module.collection] || item.nombre || item.titulo || item.id;
+  const secondary = (secondaryValues[module.collection] || [item.estado, item.comuna])
+    .filter((value) => value != null && value !== '')
+    .join(' · ');
   const status = item.estado ||
     (typeof item.activo === 'boolean' ? (item.activo ? 'ACTIVO' : 'INACTIVO') : null) ||
     (typeof item.is_active === 'boolean' ? (item.is_active ? 'ACTIVO' : 'INACTIVO') : null);
@@ -764,7 +810,7 @@ function RecordCard({ item, module, onOpen, onEdit, onToggle, onAction }) {
             <Text style={styles.recordTitle}>{String(title)}</Text>
             {secondary ? <Text style={styles.secondaryText}>{String(secondary)}</Text> : null}
           </View>
-          {status ? <StatusBadge label={String(status)} tone={String(status).includes('ACTIV') || status === 'VIGENTE' ? 'success' : 'neutral'} /> : null}
+          {status ? <StatusBadge label={String(status)} tone={String(status).includes('ACTIV') || String(status).includes('VIGENTE') ? 'success' : 'neutral'} /> : null}
         </View>
       </TouchableOpacity>
       <View style={styles.recordActions}>
@@ -803,23 +849,36 @@ function AdminModuleScreen({ moduleId, onBack, onDetail, onOpenRouteMap, related
   const [filter, setFilter] = useState('TODOS');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [licenseDriverNames, setLicenseDriverNames] = useState({});
   const [formVisible, setFormVisible] = useState(false);
   const [editing, setEditing] = useState(null);
   const [pendingToggle, setPendingToggle] = useState(null);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
-      setRecords(await listRecords(module.collection));
+      const loadedRecords = await listRecords(module.collection);
+      setRecords(loadedRecords);
+      if (moduleId === 'licencias') {
+        try {
+          const drivers = await listRecords('conductores');
+          setLicenseDriverNames(Object.fromEntries(drivers.map((driver) => [
+            String(driver.id),
+            [driver.nombre_chofer, driver.apellido_chofer].filter(Boolean).join(' '),
+          ])));
+        } catch (_lookupError) {
+          setLicenseDriverNames({});
+        }
+      }
     } catch (loadError) {
       setError(loadError.message || 'No se pudo cargar la información.');
     } finally {
       setLoading(false);
     }
-  };
+  }, [module.collection, moduleId]);
 
-  useEffect(() => { load(); }, [module.collection]);
+  useEffect(() => { Promise.resolve().then(load); }, [load]);
 
   const visible = useMemo(() => records.filter((record) => {
     if (relatedFilter && String(record[relatedFilter.field]) !== String(relatedFilter.value)) return false;
@@ -868,6 +927,7 @@ function AdminModuleScreen({ moduleId, onBack, onDetail, onOpenRouteMap, related
     <RecordCard
       item={item}
       module={module}
+      licenseDriverName={licenseDriverNames[String(item.conductor)]}
       onOpen={onDetail}
       onEdit={(record) => { setEditing(record); setFormVisible(true); }}
       onToggle={setPendingToggle}
@@ -906,6 +966,7 @@ function AdminModuleScreen({ moduleId, onBack, onDetail, onOpenRouteMap, related
                 ? 'No hay posiciones GPS reales. No se mostrarán vehículos DEMO como si estuvieran en línea.'
                 : 'Solo se consideran actuales las posiciones válidas recibidas en los últimos 5 minutos.'}
             </DemoBanner>
+            {error ? <SecondaryButton title="Reintentar carga del GPS" icon="refresh-outline" onPress={load} /> : null}
           </View>
           <MapView provider={PROVIDER_DEFAULT} style={styles.monitorMap} initialRegion={REGION_LA_GRANJA}>
             {locations.map((item) => (
@@ -984,6 +1045,7 @@ function AdminModuleScreen({ moduleId, onBack, onDetail, onOpenRouteMap, related
               <Text style={styles.secondaryText}>Los datos de ruta se administran en el servidor; los puntos GPS se gestionan desde el detalle de cada ruta.</Text>
             ) : null}
             {error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
+            {error ? <SecondaryButton title={`Reintentar carga de ${module.title.toLowerCase()}`} icon="refresh-outline" onPress={load} style={styles.createButton} /> : null}
             {loading ? <Text style={styles.loadingText}>Cargando...</Text> : null}
           </View>
         )}
@@ -1183,19 +1245,31 @@ function AdminRouteMap({ route, onBack }) {
   );
 }
 
-function AdminReports({ onBack }) {
+function AdminReports({ onBack, onOpen }) {
   const [counts, setCounts] = useState({});
   const [error, setError] = useState('');
-  useEffect(() => {
-    Promise.all(['conductores', 'vehiculos', 'solicitudes', 'viajes', 'calificaciones', 'emergencias', 'rutas']
-      .map(async (collection) => [collection, (await listRecords(collection)).length]))
-      .then((entries) => setCounts(Object.fromEntries(entries)))
-      .catch((loadError) => setError(loadError.message));
+  const [loading, setLoading] = useState(true);
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    const results = await Promise.allSettled(REPORT_COLLECTIONS.map(async (collection) => [collection, (await listRecords(collection)).length]));
+    const nextCounts = {};
+    const failed = [];
+    results.forEach((result, index) => {
+      if (result.status === 'fulfilled') nextCounts[result.value[0]] = result.value[1];
+      else failed.push(REPORT_COLLECTIONS[index]);
+    });
+    setCounts(nextCounts);
+    setError(failed.length ? `No se pudieron cargar: ${failed.join(', ')}.` : '');
+    setLoading(false);
   }, []);
+  useEffect(() => { Promise.resolve().then(load); }, [load]);
   return (
     <Page title="Reportes" subtitle={DEMO_MODE ? 'Indicadores locales de demostración' : 'Indicadores del servidor'} onBack={onBack}>
       <DemoBanner>{DEMO_MODE ? 'Estadísticas MOCK; no son estadísticas reales de CONATACOCH.' : 'Indicadores calculados con datos del servidor.'}</DemoBanner>
+      {loading ? <Text style={styles.loadingText}>Cargando reportes...</Text> : null}
       {error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
+      {error ? <SecondaryButton title="Reintentar carga de reportes" icon="refresh-outline" onPress={load} /> : null}
       <View style={styles.statsGrid}>
         {[
           ['Conductores', counts.conductores],
@@ -1205,7 +1279,15 @@ function AdminReports({ onBack }) {
           ['Calificaciones DEMO', counts.calificaciones],
           ['Emergencias MOCK', counts.emergencias],
           ['Rutas registradas', counts.rutas],
-        ].map(([label, value]) => <StatCard key={label} label={label} value={value ?? '...'} icon="bar-chart-outline" />)}
+        ].map(([label, value], index) => (
+          <StatCard
+            key={label}
+            label={label}
+            value={value ?? '...'}
+            icon="bar-chart-outline"
+            onPress={() => onOpen(['conductores', 'vehiculos', 'solicitudes', 'viajes', 'calificaciones', 'emergencias', 'rutas'][index])}
+          />
+        ))}
       </View>
     </Page>
   );
@@ -1354,7 +1436,7 @@ export default function AdminNavigator({ onLogout }) {
         />
       );
     }
-    if (screen === 'reportes') return <AdminReports onBack={backToAdmin} />;
+    if (screen === 'reportes') return <AdminReports onBack={backToAdmin} onOpen={openScreen} />;
     if (screen === 'perfil') return <AdminProfile user={user} onLogout={logout} />;
     if (screen === 'configuracion') return <AdminSettings onBack={backToAdmin} onLogout={logout} />;
     if (screen === 'dashboard') return <AdminDashboardScreen onOpen={openScreen} />;
