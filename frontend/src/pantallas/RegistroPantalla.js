@@ -15,9 +15,11 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { apiRequest } from '../servicios/apiService';
 
 export default function RegistroPantalla({ onVolver }) {
-  const [nombre, setNombre] = useState('');
+  const [nombreUsuario, setNombreUsuario] = useState('');
+  const [apellidoUsuario, setApellidoUsuario] = useState('');
   const [correo, setCorreo] = useState('');
   const [telefono, setTelefono] = useState('');
   const [password, setPassword] = useState('');
@@ -25,15 +27,15 @@ export default function RegistroPantalla({ onVolver }) {
 
   const manejarRegistro = async () => {
     // === VALIDACIONES ESTRICTAS ===
-    const regexNombre = /^[a-zA-ZÀ-ÿ\s]{3,50}$/; 
+    const regexNombre = /^[a-zA-ZÀ-ÿ\s]{2,50}$/;
     const regexCorreo = /^[^\s@]+@[^\s@]+\.[^\s@]+$/; 
 
-    if (!nombre || !correo || !telefono || !password) {
+    if (!nombreUsuario || !apellidoUsuario || !correo || !telefono || !password) {
       Alert.alert('Error', 'Todos los campos son obligatorios.');
       return;
     }
-    if (!regexNombre.test(nombre.trim())) {
-      Alert.alert('Datos Inválidos', 'El nombre solo debe contener letras y tener al menos 3 caracteres.');
+    if (!regexNombre.test(nombreUsuario.trim()) || !regexNombre.test(apellidoUsuario.trim())) {
+      Alert.alert('Datos Inválidos', 'El nombre y el apellido deben contener solo letras y tener al menos 2 caracteres.');
       return;
     }
     if (!regexCorreo.test(correo.trim())) {
@@ -44,8 +46,8 @@ export default function RegistroPantalla({ onVolver }) {
       Alert.alert('Datos Inválidos', 'El número de teléfono es muy corto.');
       return;
     }
-    if (password.length < 6) {
-      Alert.alert('Seguridad', 'La contraseña debe tener un mínimo de 6 caracteres.');
+    if (password.length < 8) {
+      Alert.alert('Seguridad', 'La contraseña debe tener un mínimo de 8 caracteres.');
       return;
     }
     if (password !== confirmarPassword) {
@@ -54,35 +56,24 @@ export default function RegistroPantalla({ onVolver }) {
     }
 
     const payload = {
-      nombre: nombre.trim(),
+      nombre_usuario: nombreUsuario.trim(),
+      apellido_usuario: apellidoUsuario.trim(),
       correo: correo.trim().toLowerCase(),
       telefono: telefono.trim(),
-      password: password
+      password,
     };
 
     try {
-      const respuesta = await fetch('http://192.168.1.185:8000/api/registro-usuario/', {
+      await apiRequest('/api/registro-usuario/', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        skipAuth: true,
         body: JSON.stringify(payload),
       });
-
-      const contentType = respuesta.headers.get("content-type");
-      if (contentType && contentType.indexOf("application/json") !== -1) {
-        const data = await respuesta.json();
-        
-        if (respuesta.ok) {
-          Alert.alert('¡Bienvenido!', 'Tu cuenta ha sido registrada con éxito.', [
-            { text: 'Iniciar Sesión', onPress: () => onVolver() }
-          ]);
-        } else {
-          Alert.alert('Error al registrar', data.error || 'Verifica los datos.');
-        }
-      } else {
-        Alert.alert('Error', 'Fallo en la comunicación con el servidor.');
-      }
+      Alert.alert('¡Bienvenido!', 'Tu cuenta ha sido registrada con éxito.', [
+        { text: 'Iniciar Sesión', onPress: () => onVolver() }
+      ]);
     } catch (error) {
-      Alert.alert('Error de conexión', 'No se pudo conectar con el servidor.');
+      Alert.alert('Error al registrar', error.message || 'No se pudo conectar con el servidor.');
     }
   };
 
@@ -120,13 +111,22 @@ export default function RegistroPantalla({ onVolver }) {
 
               <View style={styles.formulario}>
                 
-                <Text style={styles.label}>Nombre Completo</Text>
+                <Text style={styles.label}>Nombre</Text>
                 <TextInput 
                   style={styles.input} 
-                  placeholder="Ej: Juan Pérez" 
+                  placeholder="Ej: Juan"
                   placeholderTextColor="#A0A0A0"
-                  value={nombre} 
-                  onChangeText={setNombre} 
+                  value={nombreUsuario}
+                  onChangeText={setNombreUsuario}
+                />
+
+                <Text style={styles.label}>Apellido</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="Ej: Pérez"
+                  placeholderTextColor="#A0A0A0"
+                  value={apellidoUsuario}
+                  onChangeText={setApellidoUsuario}
                 />
 
                 <Text style={styles.label}>Correo Electrónico</Text>
@@ -153,7 +153,7 @@ export default function RegistroPantalla({ onVolver }) {
                 <Text style={styles.label}>Contraseña</Text>
                 <TextInput 
                   style={styles.input} 
-                  placeholder="Mínimo 6 caracteres" 
+                  placeholder="Mínimo 8 caracteres"
                   placeholderTextColor="#A0A0A0"
                   value={password} 
                   onChangeText={setPassword} 

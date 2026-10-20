@@ -5,12 +5,13 @@ import {
   TouchableWithoutFeedback, Keyboard 
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { DEMO_MODE, loginWithRole } from '../servicios/authService';
 
 export default function LoginPantalla({ onLogin, onIrRegistro, onChoferPress, onAdminPress }) {
   // Cambiamos 'correo' por 'credencial' para que sea flexible
   const [credencial, setCredencial] = useState(''); 
   const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
 
   const manejarLogin = async () => {
     if (!credencial || !password) {
@@ -18,30 +19,18 @@ export default function LoginPantalla({ onLogin, onIrRegistro, onChoferPress, on
       return;
     }
 
+    setLoading(true);
     try {
-      // IMPORTANTE: Cambia esta IP por tu IP local real
-      const respuesta = await fetch('http://192.168.1.185:8000/api/login/', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          credencial: credencial.trim().toLowerCase(), // Enviamos 'credencial'
-          password: password
-        }),
-      });
-
-      const data = await respuesta.json();
-
-      if (respuesta.ok) {
-        // Guardamos los datos de la sesión real en el teléfono
-        await AsyncStorage.setItem('usuarioData', JSON.stringify(data));
-        
-        // Avisamos a App.js que el login fue exitoso
-        onLogin(data); 
-      } else {
-        Alert.alert('Acceso Denegado', data.error || 'Credenciales inválidas.');
-      }
+      const user = await loginWithRole(
+        null,
+        credencial.trim(),
+        password,
+      );
+      onLogin(user);
     } catch (error) {
-      Alert.alert('Error', 'No se pudo conectar con el servidor.');
+      Alert.alert('No se pudo iniciar sesión', error.message || 'Comprueba tu conexión y tus credenciales.');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -65,6 +54,9 @@ export default function LoginPantalla({ onLogin, onIrRegistro, onChoferPress, on
             </View>
 
             <View style={styles.formulario}>
+              {DEMO_MODE ? (
+                <Text style={styles.subtitulo}>DEMO: pasajero-demo · DEMO-ONLY</Text>
+              ) : null}
               {/* Actualizamos la etiqueta para indicar que acepta ambas opciones */}
               <Text style={styles.label}>Correo o Nombre de usuario</Text>
               <TextInput 
@@ -86,8 +78,8 @@ export default function LoginPantalla({ onLogin, onIrRegistro, onChoferPress, on
                 secureTextEntry 
               />
 
-              <TouchableOpacity style={styles.botonLogin} onPress={manejarLogin}>
-                <Text style={styles.textoBotonLogin}>Ingresar</Text>
+              <TouchableOpacity style={styles.botonLogin} onPress={manejarLogin} disabled={loading}>
+                <Text style={styles.textoBotonLogin}>{loading ? 'Ingresando...' : 'Ingresar'}</Text>
               </TouchableOpacity>
 
               <TouchableOpacity style={styles.botonVolver} onPress={() => onIrRegistro()}>

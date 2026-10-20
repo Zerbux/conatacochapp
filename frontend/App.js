@@ -20,10 +20,10 @@ export default function App() {
   const manejarLogin = (usuario) => {
     const rol = String(usuario?.tipo_usuario || '').toUpperCase();
     if (rol === 'CONDUCTOR') {
-      if (!usuario.access && !usuario.access_token) {
+      if (usuario.modo !== 'MOCK' && !usuario.key && !usuario.access && !usuario.access_token) {
         Alert.alert(
           'Acceso bloqueado',
-          'El servidor no entrega una sesión segura para el rol conductor. Usa el acceso DEMO hasta que el backend implemente permisos.',
+          'El servidor no entregó una sesión segura para el rol conductor.',
         );
         return;
       }
@@ -31,10 +31,10 @@ export default function App() {
       return;
     }
     if (rol === 'ADMIN') {
-      if (!usuario.access && !usuario.access_token) {
+      if (usuario.modo !== 'MOCK' && !usuario.key && !usuario.access && !usuario.access_token) {
         Alert.alert(
           'Acceso bloqueado',
-          'El servidor no entrega una sesión segura para el rol administrador. Usa el acceso DEMO hasta que el backend implemente permisos.',
+          'El servidor no entregó una sesión segura para el rol administrador.',
         );
         return;
       }

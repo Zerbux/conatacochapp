@@ -1,16 +1,21 @@
-const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL || '';
+import { Platform } from 'react-native';
+import { getSessionToken } from './sessionService';
+
+const DEFAULT_API_BASE_URL = Platform.OS === 'android'
+  ? 'http://10.0.2.2:8000'
+  : 'http://127.0.0.1:8000';
+const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL?.trim() || DEFAULT_API_BASE_URL;
 
 export async function apiRequest(path, options = {}) {
-  if (!API_BASE_URL) {
-    throw new Error('Configura EXPO_PUBLIC_API_URL antes de conectar el frontend con el servidor.');
-  }
-
+  const { skipAuth = false, ...requestOptions } = options;
+  const token = skipAuth ? null : await getSessionToken();
   const response = await fetch(`${API_BASE_URL.replace(/\/$/, '')}${path}`, {
-    ...options,
+    ...requestOptions,
     headers: {
       Accept: 'application/json',
       'Content-Type': 'application/json',
-      ...options.headers,
+      ...(token ? { Authorization: `Token ${token}` } : {}),
+      ...requestOptions.headers,
     },
   });
 

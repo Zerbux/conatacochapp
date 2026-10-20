@@ -1,9 +1,23 @@
-export const DEMO_MODE = process.env.EXPO_PUBLIC_DEMO_MODE !== 'false';
+import { apiRequest } from './apiService';
+import { clearSessionToken, getSessionToken, saveSessionToken } from './sessionService';
+
+export const DEMO_MODE = process.env.EXPO_PUBLIC_DEMO_MODE === 'true';
 
 const DEMO_ACCOUNTS = {
+  REGISTRADO: {
+    credential: 'pasajero-demo',
+    password: 'DEMO-ONLY',
+    user: {
+      id: 'USR-DEMO-001',
+      identificador: 'USR-DEMO-001',
+      nombre: 'Pasajero DEMO',
+      tipo_usuario: 'REGISTRADO',
+      correo: 'pasajero-demo@example.test',
+    },
+  },
   CONDUCTOR: {
     credential: 'conductor-demo',
-    password: 'DEMO-ONLY',
+    password: 'CHOFER-ONLY',
     user: {
       id: 'COND-DEMO-001',
       nombre: 'Conductor DEMO 01',
@@ -14,7 +28,7 @@ const DEMO_ACCOUNTS = {
   },
   ADMIN: {
     credential: 'admin-demo',
-    password: 'DEMO-ONLY',
+    password: 'ADMIN-ONLY',
     user: {
       id: 'ADMIN-DEMO-001',
       nombre: 'Administrador DEMO',
@@ -27,7 +41,7 @@ const DEMO_ACCOUNTS = {
 
 export async function loginWithRole(role, credential, password) {
   if (DEMO_MODE) {
-    const account = DEMO_ACCOUNTS[role];
+    const account = DEMO_ACCOUNTS[role || 'REGISTRADO'];
     if (
       !account ||
       credential.trim().toLowerCase() !== account.credential ||
@@ -38,7 +52,27 @@ export async function loginWithRole(role, credential, password) {
     return { ...account.user, modo: 'MOCK' };
   }
 
-  throw new Error(
-    'El servidor actual no emite sesiones seguras ni protege sus endpoints por rol. El acceso real queda bloqueado hasta implementar permisos y tokens en Django.',
-  );
+  const payload = { credencial: credential, password };
+  if (role) payload.role = role;
+  const response = await apiRequest('/api/login/', {
+    method: 'POST',
+    skipAuth: true,
+    body: JSON.stringify(payload),
+  });
+  if (!response.key) {
+    throw new Error('El servidor no devolvió un token de sesión válido.');
+  }
+  await saveSessionToken(response.key);
+  return { ...response, modo: 'API' };
+}
+
+export async function logout() {
+  try {
+    if (!DEMO_MODE) {
+      const token = await getSessionToken();
+      if (token) await apiRequest('/api/logout/', { method: 'POST' });
+    }
+  } finally {
+    await clearSessionToken();
+  }
 }

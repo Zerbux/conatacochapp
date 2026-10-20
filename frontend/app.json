@@ -38,7 +38,8 @@
         {
           "faceIDPermission": "CONATACOCH utiliza Face ID para confirmar el acceso biométrico."
         }
-      ]
+      ],
+      "expo-secure-store"
     ]
   }
 }

@@ -15,7 +15,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 
 export const COLORES = {
-  verde: '#149E2D',
+  verde: '#1A9C43',
   negro: '#000000',
   blanco: '#FFFFFF',
   fondo: '#F5F5F5',
@@ -342,12 +342,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
   },
-  primaryButton: { backgroundColor: '#149E2D' },
+  primaryButton: { backgroundColor: '#1A9C43' },
   dangerButton: { backgroundColor: '#D81B60' },
-  secondaryButton: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#149E2D' },
+  secondaryButton: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#1A9C43' },
   buttonDisabled: { opacity: 0.5 },
   primaryButtonText: { color: '#FFFFFF', fontSize: 15, fontWeight: '800', textAlign: 'center' },
-  secondaryButtonText: { color: '#149E2D', fontSize: 15, fontWeight: '800', textAlign: 'center' },
+  secondaryButtonText: { color: '#1A9C43', fontSize: 15, fontWeight: '800', textAlign: 'center' },
   badge: { alignSelf: 'flex-start', borderRadius: 20, paddingHorizontal: 10, paddingVertical: 5 },
   badgeText: { fontSize: 11, fontWeight: '800', textTransform: 'uppercase' },
   fieldWrap: { marginBottom: 12 },

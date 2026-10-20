@@ -8,10 +8,13 @@ class Usuario(AbstractUser):
     TIPO_USUARIO_CHOICES = (
         ('TEMPORAL', 'Temporal'),
         ('REGISTRADO', 'Registrado'),
+        ('CONDUCTOR', 'Conductor'),
         ('ADMIN', 'Administrador'),
     )
     identificador = models.CharField(max_length=50, unique=True) # Ej: USR-TEMP-4821
     tipo_usuario = models.CharField(max_length=20, choices=TIPO_USUARIO_CHOICES, default='TEMPORAL')
+    nombre_usuario = models.CharField(max_length=100, blank=True)
+    apellido_usuario = models.CharField(max_length=100, blank=True)
     telefono = models.CharField(max_length=20, null=True, blank=True)
     installation_id = models.CharField(max_length=255, unique=True, null=True, blank=True)
     ultima_actividad = models.DateTimeField(default=timezone.now)
@@ -26,7 +29,8 @@ class Conductor(models.Model):
     # La autenticación se maneja vinculando al conductor con un Usuario registrado
     usuario = models.OneToOneField(Usuario, on_delete=models.CASCADE, related_name='perfil_conductor')
     rut = models.CharField(max_length=12, unique=True)
-    nombre = models.CharField(max_length=100)
+    nombre_chofer = models.CharField(max_length=100)
+    apellido_chofer = models.CharField(max_length=100, blank=True)
     direccion = models.CharField(max_length=150)
     comuna = models.CharField(max_length=50)
     fono_celular = models.CharField(max_length=20)
@@ -36,7 +40,8 @@ class Conductor(models.Model):
     estado = models.CharField(max_length=20, default='ACTIVO')
 
     def __str__(self):
-        return f"{self.nombre} - RUT: {self.rut}"
+        nombre_completo = f"{self.nombre_chofer} {self.apellido_chofer}".strip()
+        return f"{nombre_completo} - RUT: {self.rut}"
 
 
 # 3. LICENCIA (Permite historial de renovaciones)
@@ -53,7 +58,7 @@ class Licencia(models.Model):
     estado = models.CharField(max_length=20, default='VIGENTE')
 
     def __str__(self):
-        return f"Licencia {self.clase} - {self.conductor.nombre} ({self.estado})"
+        return f"Licencia {self.clase} - {self.conductor.nombre_chofer} ({self.estado})"
 
 
 # 4. VEHICULO
@@ -64,11 +69,15 @@ class Vehiculo(models.Model):
     modelo = models.CharField(max_length=50)
     anio = models.IntegerField()
     capacidad = models.IntegerField(default=4, validators=[MinValueValidator(1), MaxValueValidator(4)])
+    asientos_disponibles = models.IntegerField(default=4, validators=[MinValueValidator(0), MaxValueValidator(4)])
+    maletero_ocupado = models.BooleanField(default=False)
+    en_servicio = models.BooleanField(default=False)
     estado = models.CharField(max_length=20, default='ACTIVO')
 
     class Meta:
             constraints = [
-                models.CheckConstraint(condition=models.Q(capacidad__gte=1) & models.Q(capacidad__lte=4), name='capacidad_valida')
+                models.CheckConstraint(condition=models.Q(capacidad__gte=1) & models.Q(capacidad__lte=4), name='capacidad_valida'),
+                models.CheckConstraint(condition=models.Q(asientos_disponibles__gte=0) & models.Q(asientos_disponibles__lte=4), name='asientos_disponibles_validos'),
             ]
 
     def __str__(self):
@@ -177,3 +186,31 @@ class Calificacion(models.Model):
             constraints = [
                 models.CheckConstraint(condition=models.Q(puntaje__gte=1) & models.Q(puntaje__lte=5), name='puntaje_valido')
             ]
+
+
+class Emergencia(models.Model):
+    ESTADO_CHOICES = (
+        ('ACTIVA', 'Activa'),
+        ('ATENDIDA', 'Atendida'),
+        ('CERRADA', 'Cerrada'),
+    )
+    conductor = models.ForeignKey(Conductor, on_delete=models.CASCADE, related_name='emergencias')
+    vehiculo = models.ForeignKey(Vehiculo, on_delete=models.SET_NULL, null=True, blank=True, related_name='emergencias')
+    observacion = models.TextField(blank=True)
+    latitud = models.DecimalField(max_digits=10, decimal_places=8, null=True, blank=True)
+    longitud = models.DecimalField(max_digits=11, decimal_places=8, null=True, blank=True)
+    fecha_hora = models.DateTimeField(auto_now_add=True)
+    estado = models.CharField(max_length=20, choices=ESTADO_CHOICES, default='ACTIVA')
+
+
+class Notificacion(models.Model):
+    ESTADO_CHOICES = (
+        ('NO_LEIDA', 'No leída'),
+        ('LEIDA', 'Leída'),
+    )
+    usuario = models.ForeignKey(Usuario, on_delete=models.CASCADE, null=True, blank=True, related_name='notificaciones')
+    tipo = models.CharField(max_length=30, default='SISTEMA')
+    titulo = models.CharField(max_length=150)
+    detalle = models.TextField()
+    fecha_hora = models.DateTimeField(auto_now_add=True)
+    estado = models.CharField(max_length=20, choices=ESTADO_CHOICES, default='NO_LEIDA')

@@ -4,10 +4,11 @@ export const MOCK_USERS = [
   {
     id: 'USR-DEMO-001',
     identificador: 'USR-DEMO-001',
-    nombre: 'Usuario DEMO 01',
-    correo: 'usuario-demo-01@example.test',
+    nombre_usuario: 'Usuario',
+    apellido_usuario: 'DEMO 01',
+    email: 'usuario-demo-01@example.test',
     telefono: 'No disponible DEMO',
-    tipo: 'REGISTRADO',
+    tipo_usuario: 'REGISTRADO',
     fechaCreacion: '2026-01-10',
     ultimaActividad: '2026-01-10',
     estado: 'ACTIVO',
@@ -16,10 +17,11 @@ export const MOCK_USERS = [
   {
     id: 'USR-TEMP-DEMO-002',
     identificador: 'USR-TEMP-DEMO-002',
-    nombre: 'Usuario temporal DEMO',
-    correo: 'No disponible DEMO',
+    nombre_usuario: 'Usuario temporal',
+    apellido_usuario: 'DEMO',
+    email: 'No disponible DEMO',
     telefono: 'No disponible DEMO',
-    tipo: 'TEMPORAL',
+    tipo_usuario: 'TEMPORAL',
     fechaCreacion: '2026-01-11',
     ultimaActividad: '2026-01-11',
     estado: 'ACTIVO',
@@ -28,10 +30,11 @@ export const MOCK_USERS = [
   {
     id: 'ADMIN-DEMO-001',
     identificador: 'ADMIN-DEMO-001',
-    nombre: 'Administrador DEMO',
-    correo: 'admin-demo@example.test',
+    nombre_usuario: 'Administrador',
+    apellido_usuario: 'DEMO',
+    email: 'admin-demo@example.test',
     telefono: 'No disponible DEMO',
-    tipo: 'ADMIN',
+    tipo_usuario: 'ADMIN',
     fechaCreacion: '2026-01-01',
     ultimaActividad: '2026-01-11',
     estado: 'ACTIVO',
@@ -43,13 +46,14 @@ export const MOCK_DRIVERS = [
   {
     id: 'COND-DEMO-001',
     rut: 'RUT DEMO 001',
-    nombre: 'Conductor DEMO 01',
+    nombre_chofer: 'Conductor DEMO',
+    apellido_chofer: '01',
     direccion: 'Dirección DEMO',
     comuna: 'Comuna DEMO',
     fono_celular: 'No disponible DEMO',
     fono_fijo: 'No disponible DEMO',
     fono_emergencia: 'No disponible DEMO',
-    correo: 'conductor-demo-01@example.test',
+    usuario_email: 'conductor-demo-01@example.test',
     estado: 'ACTIVO',
     biometria_activa: false,
     usuario: 'USR-COND-DEMO-001',
@@ -185,6 +189,7 @@ export const MOCK_NOTIFICATIONS = [
 ];
 
 export const MOCK_LOCATIONS = [];
+export const MOCK_ROUTE_TRACES = [];
 
 export const MOCK_COLLECTIONS = {
   usuarios: MOCK_USERS,
@@ -192,6 +197,7 @@ export const MOCK_COLLECTIONS = {
   licencias: MOCK_LICENSES,
   vehiculos: MOCK_VEHICLES,
   rutas: MOCK_ROUTES,
+  trazadosRuta: MOCK_ROUTE_TRACES,
   vehiculoRuta: MOCK_VEHICLE_ROUTES,
   solicitudes: MOCK_REQUESTS,
   viajes: MOCK_TRIPS,
