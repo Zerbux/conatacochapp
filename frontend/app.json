@@ -28,6 +28,13 @@
       "expo-asset",
       "expo-status-bar",
       [
+        "expo-image-picker",
+        {
+          "photosPermission": "CONATACOCH permite seleccionar imágenes para el catálogo de rutas.",
+          "microphonePermission": false
+        }
+      ],
+      [
         "expo-location",
         {
           "locationWhenInUsePermission": "CONATACOCH usa tu ubicación para encontrar colectivos y mostrar rutas mientras utilizas la app."

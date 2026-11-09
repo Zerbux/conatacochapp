@@ -6,6 +6,7 @@ from pathlib import Path
 
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
+from django.core.management import call_command
 from django.db import transaction
 
 from core.models import Ruta, TrazadoRuta, Vehiculo, VehiculoRuta
@@ -30,6 +31,18 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
+        # Mantén el nombre histórico del comando, pero usa el importador sin
+        # geocodificación ni interpolación automática de coordenadas.
+        call_command(
+            'importar_rutas_regionales',
+            archivo=options['archivo'],
+            region='13',
+            comuna='LA GRANJA',
+            aplicar=options['aplicar'],
+            actualizar_existentes=options['reemplazar_trazados'],
+        )
+        return
+
         try:
             import pandas as pd
             from geopy.exc import GeocoderServiceError, GeocoderTimedOut

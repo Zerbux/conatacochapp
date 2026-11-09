@@ -1,6 +1,7 @@
 from django.db import models
 from django.contrib.auth.models import AbstractUser
-from django.core.validators import MinValueValidator, MaxValueValidator
+from django.core.exceptions import ValidationError
+from django.core.validators import MinValueValidator, MaxValueValidator, RegexValidator
 from django.utils import timezone
 
 # 1. USUARIO (Pasajeros temporales, registrados y administradores)
@@ -49,6 +50,7 @@ class Licencia(models.Model):
     CLASE_CHOICES = (
         ('A2', 'A2'),
         ('A3', 'A3'),
+        ('A2_A3', 'Ambas'),
     )
     conductor = models.ForeignKey(Conductor, on_delete=models.CASCADE, related_name='licencias')
     fecha_emision = models.DateField()
@@ -59,6 +61,13 @@ class Licencia(models.Model):
 
     def __str__(self):
         return f"Licencia {self.clase} - {self.conductor.nombre_chofer} ({self.estado})"
+
+    def clean(self):
+        super().clean()
+        if self.fecha_vencimiento and self.fecha_vencimiento <= timezone.localdate():
+            raise ValidationError({
+                'fecha_vencimiento': 'La fecha de vencimiento debe ser posterior a la fecha actual.',
+            })
 
 
 # 4. VEHICULO
@@ -84,14 +93,30 @@ class Vehiculo(models.Model):
         return f"{self.patente} - {self.marca} {self.modelo}"
 
 
-# 5. RUTA (Catálogo oficial de los 15 recorridos)
+# 5. RUTA (Catálogo de recorridos oficiales)
 class Ruta(models.Model):
-    folio = models.CharField(max_length=20, unique=True) # Ej: 233003
+    region_code = models.CharField(
+        max_length=2, null=True, blank=True,
+        validators=[RegexValidator(r'^(?:[1-9]|1[0-6])$', 'Usa el código regional oficial entre 1 y 16.')],
+    )
+    folio = models.CharField(max_length=20) # Ej: 233003
     nombre = models.CharField(max_length=100)
     origen = models.CharField(max_length=100)
     destino = models.CharField(max_length=100)
     descripcion = models.TextField(null=True, blank=True)
     estado = models.CharField(max_length=20, default='ACTIVA')
+    color_hex = models.CharField(
+        max_length=7,
+        default='#1565C0',
+        validators=[RegexValidator(r'^#[0-9A-Fa-f]{6}$', 'Usa un color HEX con formato #RRGGBB.')],
+    )
+    imagen = models.FileField(upload_to='route_images/%Y/%m/', null=True, blank=True)
+    geometry = models.JSONField(default=dict, null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=['region_code', 'folio', 'nombre'], name='unique_route_region_folio_name'),
+        ]
 
     def __str__(self):
         return f"Ruta {self.folio}: {self.nombre}"
@@ -103,15 +128,27 @@ class TrazadoRuta(models.Model):
         ('IDA', 'Ida'),
         ('REGRESO', 'Regreso'),
     )
+    TIPO_TRAZADO_CHOICES = (
+        ('PRINCIPAL', 'Principal'),
+        ('ALTERNATIVO', 'Alternativo'),
+    )
     ruta = models.ForeignKey(Ruta, on_delete=models.CASCADE, related_name='trazados')
     sentido = models.CharField(max_length=10, choices=SENTIDO_CHOICES)
+    tipo_trazado = models.CharField(max_length=20, choices=TIPO_TRAZADO_CHOICES, default='PRINCIPAL')
     orden = models.IntegerField()
     calle = models.CharField(max_length=150)
-    latitud = models.DecimalField(max_digits=10, decimal_places=8)
-    longitud = models.DecimalField(max_digits=11, decimal_places=8)
+    # El Excel oficial aporta calles y orden, pero no coordenadas. NULL evita
+    # completar la geometría con posiciones inventadas.
+    latitud = models.DecimalField(max_digits=10, decimal_places=8, null=True, blank=True)
+    longitud = models.DecimalField(max_digits=11, decimal_places=8, null=True, blank=True)
 
     class Meta:
-        unique_together = ('ruta', 'sentido', 'orden')
+        constraints = [
+            models.UniqueConstraint(fields=['ruta', 'sentido', 'tipo_trazado', 'orden'], name='unique_trace_path_order'),
+        ]
+        indexes = [
+            models.Index(fields=['latitud', 'longitud'], name='trace_lat_lon_idx'),
+        ]
 
     def __str__(self):
         return f"{self.ruta.folio} - {self.sentido} - Punto {self.orden} ({self.calle})"

@@ -1,71 +1,106 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  StyleSheet, Text, View, TextInput, TouchableOpacity, ActivityIndicator,
-  useWindowDimensions, Platform, Alert, Keyboard, Image
+  ActivityIndicator, Alert, Image, Keyboard, Platform, ScrollView, StyleSheet, Text, TextInput,
+  TouchableOpacity, useWindowDimensions, View,
 } from 'react-native';
-import MapView, { Marker, Polyline, PROVIDER_DEFAULT } from '../componentes/Mapa';
+import MapView, { Circle, Marker, Polyline, PROVIDER_DEFAULT } from '../componentes/Mapa';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { apiRequest } from '../servicios/apiService';
-import { createRecord, listRecords, updateRecord } from '../servicios/dataService';
+import { createRecord, listRecords, planificarRuta, updateRecord } from '../servicios/dataService';
 import { DEMO_MODE } from '../servicios/authService';
-import { getCurrentLocation, requestForegroundLocationPermission } from '../servicios/locationService';
+import { getCurrentLocation, requestForegroundLocationPermission, watchCurrentLocation } from '../servicios/locationService';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+const USER_COLOR = '#149E2D';
+const WALK_COLOR = '#5F6368';
+// This is only the camera view used when GPS is unavailable; it is never shown as the user's location.
+const MANUAL_MAP_REGION = { latitude: -33.5385, longitude: -70.6278, latitudeDelta: 0.08, longitudeDelta: 0.08 };
 export default function InicioUsuarioPantalla({ usuarioActual }) {
-  const { width } = useWindowDimensions();
+  const { width, height } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
   const mapRef = useRef(null);
+  const gpsActive = useRef(true);
+  const locationSubscription = useRef(null);
+  const searchSequence = useRef(0);
+  const geocodeSequence = useRef(0);
+  const geocodeController = useRef(null);
   const [busqueda, setBusqueda] = useState('');
   const [buscando, setBuscando] = useState(false);
-  const [puntoSeleccionado, setPuntoSeleccionado] = useState(null);
+  const [searchMessage, setSearchMessage] = useState('');
+  const [ubicacionUsuario, setUbicacionUsuario] = useState(null);
+  const [gpsLoading, setGpsLoading] = useState(true);
+  const [gpsMessage, setGpsMessage] = useState('');
+  const [destino, setDestino] = useState(null);
+  const [origenViaje, setOrigenViaje] = useState(null);
+  const [plan, setPlan] = useState(null);
+  const [planLoading, setPlanLoading] = useState(false);
+  const [planError, setPlanError] = useState('');
   const [rutaSugerida, setRutaSugerida] = useState(null);
-  const [distanciaAprox, setDistanciaAprox] = useState(null);
   const [matchData, setMatchData] = useState(null);
-  const [estadoMatch, setEstadoMatch] = useState('BUSCANDO_UBICACION');
-  const [errorUbicacion, setErrorUbicacion] = useState('');
   const [asientos, setAsientos] = useState(1);
   const [solicitudActual, setSolicitudActual] = useState(null);
   const [enviandoSolicitud, setEnviandoSolicitud] = useState(false);
 
-  const COLORES = { verde: '#149E2D', blanco: '#FFFFFF', negro: '#000000' };
-  const REGION_LA_GRANJA = { latitude: -33.5385, longitude: -70.6278, latitudeDelta: 0.035, longitudeDelta: 0.035 };
-
-  const buscarRutaMasCercana = async (latitude, longitude) => {
-    setPuntoSeleccionado({ latitude, longitude });
-    setEstadoMatch('BUSCANDO_RUTA');
-    setErrorUbicacion('');
-    try {
-      const result = await apiRequest(`/api/rutas/match/?latitude=${encodeURIComponent(latitude)}&longitude=${encodeURIComponent(longitude)}`);
-      setMatchData(result);
-      setRutaSugerida(result.ruta || null);
-      setDistanciaAprox(result.distancia_metros);
-      setEstadoMatch(!result.ruta ? 'SIN_RUTA' : result.vehiculos?.length ? 'ENCONTRADO' : 'SIN_VEHICULOS');
-      if (mapRef.current) mapRef.current.animateToRegion({ latitude, longitude, latitudeDelta: 0.015, longitudeDelta: 0.015 }, 800);
-    } catch (error) {
-      setMatchData(null);
-      setRutaSugerida(null);
-      setEstadoMatch('ERROR');
-      setErrorUbicacion(error.message || 'No se pudo buscar la ruta en el servidor.');
+  const receiveLocation = useCallback((position, center = false) => {
+    const { latitude, longitude, accuracy } = position.coords;
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return;
+    const location = { latitude, longitude, accuracy: Number.isFinite(accuracy) ? accuracy : null };
+    setUbicacionUsuario(location);
+    setGpsMessage('');
+    if (center && mapRef.current) {
+      mapRef.current.animateToRegion({ latitude, longitude, latitudeDelta: 0.012, longitudeDelta: 0.012 }, 700);
     }
-  };
+  }, []);
 
-  const solicitarUbicacion = async () => {
-    setEstadoMatch('BUSCANDO_UBICACION');
-    setErrorUbicacion('');
+  const solicitarUbicacion = useCallback(async (center = true) => {
+    setGpsLoading(true);
+    setGpsMessage('');
     try {
       const permission = await requestForegroundLocationPermission();
       if (permission !== 'granted') {
-        setEstadoMatch('SIN_GPS');
-        setErrorUbicacion('Necesitamos tu ubicación para encontrar el colectivo más cercano. Puedes intentar nuevamente o seleccionar un punto en el mapa.');
+        setGpsMessage('No hay permiso de ubicación. Puedes concederlo en los ajustes o elegir un punto manualmente.');
         return;
       }
       const position = await getCurrentLocation();
-      await buscarRutaMasCercana(position.coords.latitude, position.coords.longitude);
+      receiveLocation(position, center);
+      if (!locationSubscription.current) {
+        locationSubscription.current = await watchCurrentLocation((nextPosition) => {
+          if (gpsActive.current) receiveLocation(nextPosition);
+        });
+      }
     } catch (error) {
-      setEstadoMatch('SIN_GPS');
-      setErrorUbicacion(error.message || 'No fue posible obtener tu ubicación. Selecciona un punto en el mapa.');
+      setGpsMessage(error.message || 'No fue posible obtener la ubicación GPS. Puedes seguir usando el mapa manualmente.');
+    } finally {
+      setGpsLoading(false);
     }
-  };
+  }, [receiveLocation]);
 
-  useEffect(() => { solicitarUbicacion(); }, []);
+  useEffect(() => {
+    gpsActive.current = true;
+    solicitarUbicacion(true);
+    return () => {
+      gpsActive.current = false;
+      locationSubscription.current?.remove();
+      locationSubscription.current = null;
+      geocodeController.current?.abort();
+    };
+  }, [solicitarUbicacion]);
+
+  useEffect(() => {
+    if (solicitudActual?.estado !== 'ACEPTADA' || !origenViaje) return undefined;
+    const refreshDriver = async () => {
+      try {
+        const match = await apiRequest(
+          `/api/rutas/match/?latitude=${encodeURIComponent(origenViaje.latitud)}&longitude=${encodeURIComponent(origenViaje.longitud)}`,
+        );
+        setMatchData(String(match.ruta?.id) === String(solicitudActual.ruta)
+          ? match
+          : { ...match, vehiculos: [] });
+      } catch { /* el marcador conserva su última posición disponible */ }
+    };
+    const timer = setInterval(refreshDriver, 10000);
+    return () => clearInterval(timer);
+  }, [solicitudActual?.estado, solicitudActual?.ruta, origenViaje?.latitud, origenViaje?.longitud]);
 
   useEffect(() => {
     if (!solicitudActual) return undefined;
@@ -80,31 +115,91 @@ export default function InicioUsuarioPantalla({ usuarioActual }) {
     return () => clearInterval(timer);
   }, [solicitudActual?.id]);
 
-  const reservar = async () => {
-    const vehicle = matchData?.vehiculos?.[0];
-    if (!vehicle || !rutaSugerida || !puntoSeleccionado || enviandoSolicitud) return;
-    if (DEMO_MODE) {
-      Alert.alert('Modo demostración', 'Desactiva EXPO_PUBLIC_DEMO_MODE para crear solicitudes reales en PostgreSQL.');
+  const buscarPlan = async (point, originOverride = null) => {
+    const selectedOrigin = originOverride || (ubicacionUsuario
+      ? { latitud: ubicacionUsuario.latitude, longitud: ubicacionUsuario.longitude }
+      : null);
+    if (!selectedOrigin) {
+      const manualOrigin = { latitud: point.latitude, longitud: point.longitude };
+      setOrigenViaje(manualOrigin);
+      setDestino(null);
+      setPlan(null);
+      setRutaSugerida(null);
+      setPlanError('Este punto quedó como origen. Ahora busca tu destino o tócalo en el mapa.');
+      mapRef.current?.animateToRegion({
+        latitude: point.latitude, longitude: point.longitude, latitudeDelta: 0.018, longitudeDelta: 0.018,
+      }, 600);
       return;
     }
-    if (asientos > Number(vehicle.asientos_disponibles)) {
-      Alert.alert('Cupos insuficientes', 'El vehículo no tiene suficientes cupos disponibles.');
+    const requestId = ++searchSequence.current;
+    const origin = {
+      latitud: Number(selectedOrigin.latitud ?? selectedOrigin.latitude),
+      longitud: Number(selectedOrigin.longitud ?? selectedOrigin.longitude),
+    };
+    const destination = { latitud: point.latitude, longitud: point.longitude };
+    setDestino(point);
+    setOrigenViaje(origin);
+    setPlan(null);
+    setRutaSugerida(null);
+    setMatchData(null);
+    setPlanError('');
+    setPlanLoading(true);
+    Keyboard.dismiss();
+    try {
+      const result = await planificarRuta(origin, destination);
+      if (requestId !== searchSequence.current) return;
+      setPlan(result);
+      const recommended = result.ruta_recomendada;
+      setRutaSugerida(recommended?.ruta || null);
+      if (!recommended) {
+        setPlanError('Aún no hay una ruta dibujada para este destino. Prueba un punto cercano.');
+        setPlanLoading(false);
+        return;
+      }
+      const routeGeometryCoordinates = getRouteGeometryCoordinates(recommended?.geometry || recommended?.ruta?.geometry);
+      const coordinates = [
+        { latitude: origin.latitud, longitude: origin.longitud },
+        { latitude: point.latitude, longitude: point.longitude },
+        ...(routeGeometryCoordinates.length
+          ? routeGeometryCoordinates
+          : (recommended.tramo_colectivo || []).map((item) => ({ latitude: item.latitud, longitude: item.longitud }))),
+      ];
+      mapRef.current?.fitToCoordinates(coordinates, {
+        edgePadding: { top: 95, right: 35, left: 35, bottom: Math.min(height * 0.58, 420) },
+        animated: true,
+      });
+    } catch (error) {
+      if (requestId === searchSequence.current) {
+        setPlanError(error.message || 'No se pudo planificar el viaje.');
+        setPlanLoading(false);
+      }
+    } finally {
+      if (requestId === searchSequence.current) setPlanLoading(false);
+    }
+  };
+
+  const reservar = async () => {
+    const activeRoute = viaje?.ruta || rutaSugerida;
+    const vehicle = String(matchData?.ruta?.id) === String(activeRoute?.id)
+      ? matchData?.vehiculos?.find((item) => Number(item.asientos_disponibles) >= asientos)
+      : null;
+    if (!vehicle || !activeRoute || !origenViaje || enviandoSolicitud) return;
+    if (DEMO_MODE) {
+      Alert.alert('Modo demostración', 'Desactiva EXPO_PUBLIC_DEMO_MODE para crear solicitudes reales en PostgreSQL.');
       return;
     }
     setEnviandoSolicitud(true);
     try {
       const request = await createRecord('solicitudes', {
         vehiculo: vehicle.id,
-        ruta: rutaSugerida.id,
+        ruta: activeRoute.id,
         cantidad_asientos: asientos,
-        latitud_recogida: puntoSeleccionado.latitude,
-        longitud_recogida: puntoSeleccionado.longitude,
+        latitud_recogida: origenViaje.latitud,
+        longitud_recogida: origenViaje.longitud,
       });
       setSolicitudActual(request);
-      setEstadoMatch('SOLICITUD_ENVIADA');
     } catch (error) {
       Alert.alert('No se pudo solicitar', error.message || 'Actualiza la búsqueda e intenta nuevamente.');
-      if (/cupo|disponible|actualizada/i.test(error.message || '')) buscarRutaMasCercana(puntoSeleccionado.latitude, puntoSeleccionado.longitude);
     } finally {
       setEnviandoSolicitud(false);
     }
@@ -115,115 +210,309 @@ export default function InicioUsuarioPantalla({ usuarioActual }) {
     try {
       await updateRecord('solicitudes', solicitudActual.id, { estado: 'CANCELADA' });
       setSolicitudActual(null);
-      setEstadoMatch(matchData?.vehiculos?.length ? 'ENCONTRADO' : 'SIN_VEHICULOS');
     } catch (error) { Alert.alert('No se pudo cancelar', error.message); }
   };
 
-  const handleMapPress = (e) => buscarRutaMasCercana(e.nativeEvent.coordinate.latitude, e.nativeEvent.coordinate.longitude);
+  const seleccionarDestino = (coordinate) => {
+    if (!coordinate) return;
+    const point = { latitude: coordinate.latitude, longitude: coordinate.longitude };
+    if (!ubicacionUsuario && !origenViaje) {
+      buscarPlan(point, null);
+      return;
+    }
+    buscarPlan(point, origenViaje);
+  };
 
   const handleBuscar = async () => {
-    if (!busqueda.trim()) { limpiarBusqueda(); return; }
-    Keyboard.dismiss(); setBuscando(true);
-    const texto = busqueda.trim();
+    const query = busqueda.trim();
+    if (!query) {
+      setSearchMessage('Escribe una dirección o un lugar para buscar.');
+      return;
+    }
+    geocodeController.current?.abort();
+    const controller = new AbortController();
+    geocodeController.current = controller;
+    const requestId = ++geocodeSequence.current;
+    const timeout = setTimeout(() => controller.abort(), 12000);
+    Keyboard.dismiss();
+    setSearchMessage('');
+    setBuscando(true);
     try {
-      const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(texto + ', Santiago, Chile')}&limit=1`, { headers: { 'User-Agent': 'ConatacochApp/1.0' }});
-      const data = await response.json();
-      if (data && data.length > 0) buscarRutaMasCercana(parseFloat(data[0].lat), parseFloat(data[0].lon));
-      else Alert.alert('No encontrado', `No pudimos ubicar "${texto}". Intenta tocar el mapa.`);
+      const url = 'https://nominatim.openstreetmap.org/search?format=json&q='
+        + encodeURIComponent(query + ', Santiago, Chile') + '&limit=1';
+      const response = await fetch(url, {
+        headers: { 'User-Agent': 'ConatacochApp/1.0' },
+        signal: controller.signal,
+      });
+      if (!response.ok) throw new Error('No se pudo conectar con el buscador de direcciones.');
+      const results = await response.json();
+      if (requestId !== geocodeSequence.current) return;
+      if (results?.length && Number.isFinite(Number(results[0].lat)) && Number.isFinite(Number(results[0].lon))) {
+        seleccionarDestino(
+          { latitude: Number(results[0].lat), longitude: Number(results[0].lon) },
+        );
+      } else {
+        setSearchMessage('No encontramos "' + query + '". Revisa el nombre o elige el punto en el mapa.');
+      }
     } catch (error) {
-      Alert.alert('Error', 'Problema de conexión al buscar.');
+      if (requestId === geocodeSequence.current) {
+        setSearchMessage(controller.signal.aborted
+          ? 'La búsqueda tardó demasiado. Comprueba tu conexión y vuelve a intentarlo.'
+          : (error.message || 'No se pudo buscar esa dirección. Comprueba tu conexión.'));
+      }
     } finally {
-      setBuscando(false);
+      clearTimeout(timeout);
+      if (requestId === geocodeSequence.current) setBuscando(false);
     }
   };
 
   const limpiarBusqueda = () => {
-    setBusqueda(''); setPuntoSeleccionado(null); setRutaSugerida(null); setMatchData(null); setDistanciaAprox(null);
-    setEstadoMatch('SIN_GPS');
-    setErrorUbicacion('Busca una dirección o toca el mapa para elegir el punto de recogida.');
-    if (mapRef.current) mapRef.current.animateToRegion(REGION_LA_GRANJA, 800);
+    searchSequence.current += 1;
+    geocodeSequence.current += 1;
+    geocodeController.current?.abort();
+    setBusqueda('');
+    setBuscando(false);
+    setSearchMessage('');
+    setDestino(null);
+    setPlan(null);
+    setOrigenViaje(null);
+    setRutaSugerida(null);
+    setMatchData(null);
+    setPlanError('');
+    setPlanLoading(false);
+    if (ubicacionUsuario) {
+      mapRef.current?.animateToRegion({
+        latitude: ubicacionUsuario.latitude,
+        longitude: ubicacionUsuario.longitude,
+        latitudeDelta: 0.012,
+        longitudeDelta: 0.012,
+      }, 600);
+    }
   };
 
-  const puntosIda = (rutaSugerida?.trazados || []).filter((p) => p.sentido === 'IDA').sort((a, b) => a.orden - b.orden)
-    .map((p) => ({ latitude: Number(p.latitud), longitude: Number(p.longitud) }));
-  const puntosRegreso = (rutaSugerida?.trazados || []).filter((p) => p.sentido === 'REGRESO').sort((a, b) => a.orden - b.orden)
-    .map((p) => ({ latitude: Number(p.latitud), longitude: Number(p.longitud) }));
-  const vehicle = matchData?.vehiculos?.find((item) => Number(item.asientos_disponibles) >= asientos) || matchData?.vehiculos?.[0];
+  const getRouteGeometryCoordinates = (geometry) => {
+    if (!geometry || typeof geometry !== 'object') return [];
+    if (geometry.type === 'LineString' && Array.isArray(geometry.coordinates)) {
+      return geometry.coordinates
+        .map((coord) => (Array.isArray(coord) && coord.length >= 2
+          ? { latitude: Number(coord[1]), longitude: Number(coord[0]) }
+          : null))
+        .filter(Boolean);
+    }
+    if (geometry.type === 'MultiLineString' && Array.isArray(geometry.coordinates)) {
+      return geometry.coordinates.flatMap((segment) => (
+        segment
+          .map((coord) => (Array.isArray(coord) && coord.length >= 2
+            ? { latitude: Number(coord[1]), longitude: Number(coord[0]) }
+            : null))
+          .filter(Boolean)
+      ));
+    }
+    return [];
+  };
+
+  const viaje = plan?.ruta_recomendada || null;
+  const activeRoute = viaje?.ruta || rutaSugerida;
+  const vehicle = String(matchData?.ruta?.id) === String(activeRoute?.id)
+    ? matchData?.vehiculos?.find((item) => Number(item.asientos_disponibles) >= asientos)
+    : null;
+  const assignedVehicle = solicitudActual?.estado === 'ACEPTADA'
+    ? matchData?.vehiculos?.find((item) => String(item.id) === String(solicitudActual.vehiculo) &&
+      String(matchData?.ruta?.id) === String(activeRoute?.id))
+    : null;
+  const userCoordinate = ubicacionUsuario
+    ? { latitude: ubicacionUsuario.latitude, longitude: ubicacionUsuario.longitude }
+    : null;
+  const tripOriginCoordinate = origenViaje
+    ? { latitude: origenViaje.latitud, longitude: origenViaje.longitud }
+    : null;
+  const movedFromTripOrigin = userCoordinate && tripOriginCoordinate && (
+    Math.abs(userCoordinate.latitude - tripOriginCoordinate.latitude) > 0.00015 ||
+    Math.abs(userCoordinate.longitude - tripOriginCoordinate.longitude) > 0.00015
+  );
+  const walkingStart = viaje?.subida
+    ? { latitude: viaje.subida.latitud, longitude: viaje.subida.longitud }
+    : null;
+  const walkingEnd = viaje?.bajada
+    ? { latitude: viaje.bajada.latitud, longitude: viaje.bajada.longitud }
+    : null;
+  const routeGeometryCoordinates = getRouteGeometryCoordinates(viaje?.geometry || viaje?.ruta?.geometry);
+  const transitCoordinates = (routeGeometryCoordinates.length
+    ? routeGeometryCoordinates
+    : (viaje?.tramo_colectivo || []).map((point) => ({ latitude: point.latitud, longitude: point.longitud }))
+  );
+  const resultPanelBottom = 78 + Math.max(insets.bottom, Platform.OS === 'ios' ? 16 : 12);
+  const resultPanelMaxHeight = Math.max(
+    80,
+    Math.min(height * 0.52, 460, height - (Platform.OS === 'ios' ? 100 : 84) - resultPanelBottom - 12),
+  );
+  const noticeMessage = searchMessage || (!destino
+    ? (gpsMessage || (!ubicacionUsuario && origenViaje
+      ? planError || 'Origen manual seleccionado. Ahora busca tu destino.'
+      : ''))
+    : '');
 
   return (
     <View style={styles.container}>
       <View style={[styles.header, { paddingHorizontal: width * 0.045 }]}>
-        <View style={styles.logoRow}>
-          <Image
-            source={require('../../assets/logoLPng.png')}
-            style={[styles.logoImage, { width: Math.min(width * 0.62, 220) }]}
-            resizeMode="contain"
-          />
-        </View>
+        <Image source={require('../../assets/logoLPng.png')} style={[styles.logoImage, { width: Math.min(width * 0.62, 220) }]} resizeMode="contain" />
       </View>
-
-      {usuarioActual ? (
-        <Text style={styles.welcomeLabel}>Hola, {usuarioActual.nombre_usuario || usuarioActual.nombre || 'pasajero'}</Text>
-      ) : null}
 
       <View style={styles.mapContainer}>
         <MapView
-          ref={mapRef} provider={PROVIDER_DEFAULT} style={styles.map}
-          initialRegion={REGION_LA_GRANJA} showsCompass={false} showsUserLocation={false} showsMyLocationButton={false}
-          onPress={handleMapPress} mapType="standard"
+          ref={mapRef}
+          provider={PROVIDER_DEFAULT}
+          style={styles.map}
+          initialRegion={userCoordinate ? { ...userCoordinate, latitudeDelta: 0.03, longitudeDelta: 0.03 } : MANUAL_MAP_REGION}
+          showsCompass={false}
+          showsUserLocation={false}
+          showsMyLocationButton={false}
+          onPress={(event) => seleccionarDestino(event?.nativeEvent?.coordinate)}
+          mapType="standard"
         >
-          {puntosIda.length > 1 && <Polyline coordinates={puntosIda} strokeColor={rutaSugerida.color || COLORES.verde} strokeWidth={6} lineCap="round" lineJoin="round" />}
-          {puntosRegreso.length > 1 && <Polyline coordinates={puntosRegreso} strokeColor={rutaSugerida.color || COLORES.verde} strokeWidth={5} lineDashPattern={[6, 6]} lineCap="round" lineJoin="round" />}
-          {puntoSeleccionado && <Marker coordinate={puntoSeleccionado}><View style={styles.userPin}><Ionicons name="location" size={36} color="#D81B60" /></View></Marker>}
-          {(matchData?.vehiculos || []).map((item) => <Marker key={item.id} coordinate={{ latitude: item.latitud, longitude: item.longitud }} title={`${item.marca} ${item.modelo}`} description={`${item.distancia_metros} m`}><View style={styles.vehiclePin}><MaterialCommunityIcons name="taxi" size={22} color="#FFFFFF" /></View></Marker>)}
+          {viaje && tripOriginCoordinate && walkingStart ? (
+            <Polyline coordinates={[tripOriginCoordinate, walkingStart]} strokeColor={WALK_COLOR} strokeWidth={4} lineDashPattern={[3, 7]} />
+          ) : null}
+          {transitCoordinates.length > 1 ? <Polyline coordinates={transitCoordinates} strokeColor="#FFFFFF" strokeWidth={12} lineCap="round" lineJoin="round" /> : null}
+          {transitCoordinates.length > 1 ? (
+            <Polyline coordinates={transitCoordinates} strokeColor={viaje.ruta.color_hex || USER_COLOR} strokeWidth={7} lineCap="round" lineJoin="round" />
+          ) : null}
+          {viaje && destino && walkingEnd ? (
+            <Polyline coordinates={[walkingEnd, destino]} strokeColor={WALK_COLOR} strokeWidth={4} lineDashPattern={[3, 7]} />
+          ) : null}
+          {ubicacionUsuario?.accuracy > 0 ? (
+            <Circle
+              center={userCoordinate}
+              radius={ubicacionUsuario.accuracy}
+              strokeColor="rgba(20,158,45,0.45)"
+              strokeWidth={1}
+              fillColor="rgba(20,158,45,0.14)"
+            />
+          ) : null}
+          {userCoordinate ? (
+            <Marker coordinate={userCoordinate} title="Tu ubicación actual" anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={false}>
+              <View style={styles.userHalo}><View style={styles.userDot} /></View>
+            </Marker>
+          ) : null}
+          {!ubicacionUsuario && tripOriginCoordinate ? (
+            <Marker coordinate={tripOriginCoordinate} title="Origen manual" pinColor="#5F6368" />
+          ) : movedFromTripOrigin ? (
+            <Marker coordinate={tripOriginCoordinate} title="Origen usado para este cálculo" pinColor="#5F6368" />
+          ) : null}
+          {destino ? <Marker coordinate={destino} title="Destino" pinColor="#C62828" /> : null}
+          {viaje && walkingStart ? <Marker coordinate={walkingStart} title={`Subida · ${viaje.subida.calle || 'colectivo'}`} pinColor="#1565C0" /> : null}
+          {viaje && walkingEnd ? <Marker coordinate={walkingEnd} title={`Bajada · ${viaje.bajada.calle || 'colectivo'}`} pinColor="#EF6C00" /> : null}
+          {assignedVehicle?.latitud != null && assignedVehicle?.longitud != null ? (
+            <Marker
+              coordinate={{ latitude: Number(assignedVehicle.latitud), longitude: Number(assignedVehicle.longitud) }}
+              title="Conductor asignado"
+              description={assignedVehicle.conductor_nombre || ''}
+              pinColor="#6A1B9A"
+            />
+          ) : null}
         </MapView>
 
         <View style={[styles.searchBar, { left: width * 0.04, right: width * 0.04 }]}>
-          <Ionicons name="search-outline" size={20} color="#777777" />
-          <TextInput style={styles.searchInput} placeholder="Busca un lugar o toca el mapa..." placeholderTextColor="#888888" value={busqueda} onChangeText={setBusqueda} onSubmitEditing={handleBuscar} returnKeyType="search" />
-          {buscando ? <ActivityIndicator size="small" color={COLORES.verde} /> : rutaSugerida ? <TouchableOpacity onPress={limpiarBusqueda}><Ionicons name="close-circle" size={22} color="#888888" /></TouchableOpacity> : <TouchableOpacity onPress={handleBuscar}><Ionicons name="arrow-forward" size={20} color={COLORES.verde} /></TouchableOpacity>}
+          <Ionicons name="search-outline" size={22} color="#555555" />
+          <TextInput
+            style={styles.searchInput}
+            placeholder="¿A dónde quieres ir?"
+            placeholderTextColor="#666666"
+            value={busqueda}
+            onChangeText={(value) => { setBusqueda(value); setSearchMessage(''); }}
+            onSubmitEditing={handleBuscar}
+            returnKeyType="search"
+            accessibilityLabel="Dirección de destino"
+          />
+          {(busqueda || destino) ? (
+            <TouchableOpacity style={styles.searchAction} accessibilityRole="button" accessibilityLabel="Limpiar búsqueda y ruta" onPress={limpiarBusqueda}>
+              <Ionicons name="close-circle" size={25} color="#666666" />
+            </TouchableOpacity>
+          ) : null}
+          <TouchableOpacity
+            style={styles.searchAction}
+            accessibilityRole="button"
+            accessibilityLabel="Buscar dirección"
+            onPress={handleBuscar}
+            disabled={buscando || !busqueda.trim()}
+          >
+            {buscando || planLoading
+              ? <ActivityIndicator size="small" color={USER_COLOR} />
+              : <Ionicons name="arrow-forward-circle" size={28} color={busqueda.trim() ? USER_COLOR : '#888888'} />}
+          </TouchableOpacity>
         </View>
 
-        <TouchableOpacity style={[styles.gpsButton, { right: width * 0.04, bottom: rutaSugerida ? 350 : 145 }]} onPress={solicitarUbicacion}>
-          <MaterialCommunityIcons name="crosshairs-gps" size={24} color={COLORES.negro} />
+        <TouchableOpacity
+          accessibilityRole="button"
+          accessibilityLabel="Centrar en mi ubicación GPS"
+          style={[styles.gpsButton, { right: width * 0.04 }]}
+          onPress={() => solicitarUbicacion(true)}
+        >
+          {gpsLoading
+            ? <ActivityIndicator size="small" color={USER_COLOR} />
+            : <MaterialCommunityIcons name="crosshairs-gps" size={24} color={USER_COLOR} />}
         </TouchableOpacity>
 
-        <View style={[styles.cardReserva, { left: width * 0.035, right: width * 0.035 }]}>
-          <View style={styles.cardHeader}>
-            <Text style={styles.cardTag}>{solicitudActual?.estado === 'ACEPTADA' ? 'Solicitud aceptada' : solicitudActual?.estado === 'RECHAZADA' ? 'Solicitud rechazada' : vehicle ? 'Colectivo más cercano' : 'Tu búsqueda'}</Text>
-            {rutaSugerida ? <TouchableOpacity onPress={limpiarBusqueda}><Ionicons name="close-circle" size={24} color="#999999" /></TouchableOpacity> : null}
+        {noticeMessage ? (
+          <View style={[styles.gpsNotice, { left: width * 0.04, right: width * 0.04 }]}>
+            <Text accessibilityRole="alert" style={styles.gpsNoticeText}>{noticeMessage}</Text>
           </View>
-          {estadoMatch === 'BUSCANDO_UBICACION' || estadoMatch === 'BUSCANDO_RUTA' ? <View style={styles.matchMessage}><ActivityIndicator color={COLORES.verde} /><Text>Buscando ruta y colectivos...</Text></View> : null}
-          {errorUbicacion ? <Text style={styles.distanciaText}>{errorUbicacion}</Text> : null}
-          {rutaSugerida ? <>
-            <Text style={styles.folioText}>Línea {rutaSugerida.folio}</Text>
-            <Text style={styles.distanciaText}>{rutaSugerida.nombre} · {rutaSugerida.origen} ↔ {rutaSugerida.destino}</Text>
-            <Text style={styles.distanciaText}>Ruta a {distanciaAprox} m de tu ubicación</Text>
-          </> : null}
-          {rutaSugerida && !vehicle && estadoMatch === 'SIN_VEHICULOS' ? <Text style={styles.emptyMessage}>Encontramos tu ruta, pero por el momento no hay colectivos con GPS activo.</Text> : null}
-          {!rutaSugerida && estadoMatch === 'SIN_RUTA' ? <Text style={styles.emptyMessage}>No encontramos una ruta CONATACOCH cercana. Toca el mapa para elegir otro punto.</Text> : null}
-          {vehicle && !solicitudActual ? <>
-            <View style={styles.vehicleDetails}>
-              {(matchData?.vehiculos?.length || 0) > 1 ? <Text style={styles.distanciaText}>{matchData.vehiculos.length} colectivos activos · mostrando el más cercano con {asientos} cupo(s)</Text> : null}
-              <Text style={styles.folioText}>{vehicle.eta_minutos} min aprox. · {vehicle.distancia_metros} m</Text>
-              <Text style={styles.distanciaText}>{vehicle.conductor_nombre || 'Conductor CONATACOCH'}</Text>
-              <Text style={styles.distanciaText}>{vehicle.marca} {vehicle.modelo} · {vehicle.patente}</Text>
-              <Text style={styles.distanciaText}>{vehicle.asientos_disponibles} cupos disponibles</Text>
-              {matchData?.tarifa_referencial_clp != null ? <Text style={styles.distanciaText}>Tarifa referencial · ${Number(matchData.tarifa_referencial_clp).toLocaleString('es-CL')} CLP</Text> : <Text style={styles.distanciaText}>Tarifa referencial no informada</Text>}
+        ) : null}
+
+        {destino ? (
+          <View style={[styles.tripCard, {
+            left: width * 0.035, right: width * 0.035,
+            bottom: resultPanelBottom,
+            maxHeight: resultPanelMaxHeight,
+          }]}>
+            <View style={styles.cardHeader}>
+              <Text style={styles.cardTag}>
+                {planLoading ? 'Calculando ruta...' : viaje ? 'Ruta recomendada' : 'Ruta no disponible'}
+              </Text>
+              <TouchableOpacity style={styles.closeButton} accessibilityRole="button" accessibilityLabel="Cerrar resultados" onPress={limpiarBusqueda}>
+                <Ionicons name="close-circle" size={26} color="#555555" />
+              </TouchableOpacity>
             </View>
-            <Text style={styles.seatLabel}>Asientos que necesitas</Text>
-            <View style={styles.seatSelector}>{[1, 2, 3, 4].map((count) => <TouchableOpacity key={count} onPress={() => setAsientos(count)} style={[styles.seatOption, asientos === count && styles.seatOptionActive]}><Text style={[styles.seatOptionText, asientos === count && styles.seatOptionTextActive]}>{count}</Text></TouchableOpacity>)}</View>
-            {asientos > Number(vehicle.asientos_disponibles) ? <Text style={styles.seatError}>El vehículo no tiene suficientes cupos disponibles.</Text> : null}
-            <TouchableOpacity disabled={enviandoSolicitud || asientos > Number(vehicle.asientos_disponibles)} style={[styles.btnSolicitar, (enviandoSolicitud || asientos > Number(vehicle.asientos_disponibles)) && styles.disabledButton]} onPress={reservar}><Text style={styles.btnSolicitarText}>{enviandoSolicitud ? 'Enviando...' : 'Reservar colectivo'}</Text></TouchableOpacity>
-          </> : null}
-          {solicitudActual ? <>
-            <Text style={styles.distanciaText}>Ruta {solicitudActual.ruta_folio || rutaSugerida?.folio} · {solicitudActual.asientos || solicitudActual.cantidad_asientos} asiento(s)</Text>
-            {solicitudActual.estado === 'PENDIENTE' ? <><Text style={styles.pendingMessage}>Esperando respuesta del conductor...</Text><TouchableOpacity style={styles.cancelButton} onPress={cancelarSolicitud}><Text style={styles.cancelText}>Cancelar solicitud</Text></TouchableOpacity></> : null}
-            {solicitudActual.estado === 'ACEPTADA' ? <Text style={styles.acceptedMessage}>¡Tu colectivo viene en camino! {vehicle?.conductor_nombre || ''} · {vehicle?.marca} {vehicle?.modelo} · {vehicle?.patente}</Text> : null}
-            {solicitudActual.estado === 'RECHAZADA' ? <><Text style={styles.seatError}>El conductor no pudo aceptar esta solicitud.</Text><TouchableOpacity style={styles.cancelButton} onPress={() => { setSolicitudActual(null); buscarRutaMasCercana(puntoSeleccionado.latitude, puntoSeleccionado.longitude); }}><Text style={styles.cancelText}>Buscar otro colectivo</Text></TouchableOpacity></> : null}
-          </> : null}
-          {estadoMatch === 'SIN_GPS' || estadoMatch === 'ERROR' ? <TouchableOpacity style={styles.retryButton} onPress={solicitarUbicacion}><Text style={styles.retryText}>Intentar nuevamente</Text></TouchableOpacity> : null}
-        </View>
+            <ScrollView style={styles.tripContent} contentContainerStyle={styles.tripContentInner} keyboardShouldPersistTaps="handled">
+              {planLoading ? <View style={styles.loadingRow}><ActivityIndicator color={USER_COLOR} /><Text style={styles.bodyText}>Calculando el recorrido...</Text></View> : null}
+              {planError ? <Text accessibilityRole="alert" style={styles.errorText}>{planError}</Text> : null}
+            {viaje ? (
+              <>
+                <Text style={styles.routeTitle}>Ruta {viaje.ruta.folio}</Text>
+                <Text style={styles.bodyText}>{viaje.ruta.nombre} · {viaje.sentido === 'IDA' ? 'Ida' : 'Regreso'} · {viaje.tipo_trazado === 'ALTERNATIVO' ? 'Alternativa' : 'Principal'}</Text>
+                <View style={styles.steps}>
+                  <Text style={styles.stepText}>Camina {viaje.caminar_origen_metros} m hasta {viaje.subida.calle || 'el punto de subida'}</Text>
+                  <Text style={[styles.stepText, { color: viaje.ruta.color_hex, fontWeight: '800' }]}>Toma el colectivo · {viaje.distancia_colectivo_metros} m</Text>
+                  <Text style={styles.stepText}>Baja en {viaje.bajada.calle || 'el punto indicado'} y camina {viaje.caminar_destino_metros} m</Text>
+                </View>
+                <Text style={styles.totalTime}>{viaje.minutos_totales_estimados} min aprox.</Text>
+              </>
+            ) : null}
+            {vehicle && !solicitudActual ? (
+              <View style={styles.vehicleSection}>
+                <Text style={styles.bodyText}>Hay un vehículo disponible en esta ruta · {vehicle.asientos_disponibles} cupos</Text>
+                <View style={styles.seatSelector}>
+                  {[1, 2, 3, 4].map((count) => (
+                    <TouchableOpacity key={count} onPress={() => setAsientos(count)} style={[styles.seatOption, asientos === count && styles.seatOptionActive]}>
+                      <Text style={[styles.seatOptionText, asientos === count && styles.seatOptionTextActive]}>{count}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                <TouchableOpacity disabled={enviandoSolicitud} style={[styles.reserveButton, enviandoSolicitud && styles.disabledButton]} onPress={reservar}>
+                  <Text style={styles.reserveButtonText}>{enviandoSolicitud ? 'Enviando...' : 'Reservar colectivo'}</Text>
+                </TouchableOpacity>
+              </View>
+            ) : null}
+            {solicitudActual ? (
+              <View style={styles.vehicleSection}>
+                <Text style={styles.bodyText}>Solicitud {solicitudActual.estado?.toLowerCase()} · Ruta {solicitudActual.ruta_folio || rutaSugerida?.folio}</Text>
+                {solicitudActual.estado === 'ACEPTADA' && assignedVehicle ? <Text style={styles.bodyText}>Conductor {assignedVehicle.conductor_nombre || 'asignado'} · ubicación marcada en el mapa</Text> : null}
+                {solicitudActual.estado === 'PENDIENTE' ? <TouchableOpacity onPress={cancelarSolicitud}><Text style={styles.cancelText}>Cancelar solicitud</Text></TouchableOpacity> : null}
+              </View>
+              ) : null}
+            </ScrollView>
+          </View>
+        ) : null}
       </View>
     </View>
   );
@@ -231,39 +520,39 @@ export default function InicioUsuarioPantalla({ usuarioActual }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#000000' },
-  header: { backgroundColor: '#000000', paddingTop: Platform.OS === 'ios' ? 48 : 32, paddingBottom: 12 },
-  logoRow: { flexDirection: 'row', alignItems: 'center' },
-  logoImage: { height: 45, maxWidth: '100%' },
-  welcomeLabel: { color: '#FFFFFF', fontSize: 14, fontWeight: '700', marginTop: 6 },
+  header: { backgroundColor: '#000000', paddingTop: Platform.OS === 'ios' ? 48 : 32, paddingBottom: 10, alignItems: 'center' },
+  logoImage: { height: 42, maxWidth: '100%' },
   mapContainer: { flex: 1, backgroundColor: '#E5E3DF' },
   map: { width: '100%', height: '100%' },
-  userPin: { alignItems: 'center', justifyContent: 'center' },
-  vehiclePin: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#149E2D', borderWidth: 2, borderColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center', elevation: 5 },
-  searchBar: { position: 'absolute', top: 14, height: 50, backgroundColor: '#FFFFFF', borderRadius: 25, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, elevation: 6 },
-  searchInput: { flex: 1, height: '100%', fontSize: 13, color: '#000000', marginLeft: 8 },
-  gpsButton: { position: 'absolute', width: 46, height: 46, borderRadius: 23, backgroundColor: '#FFFFFF', justifyContent: 'center', alignItems: 'center', elevation: 6 },
-  cardReserva: { position: 'absolute', bottom: 80, backgroundColor: '#FFFFFF', borderRadius: 16, padding: 16, elevation: 8 },
-  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
-  cardTag: { fontSize: 12, fontWeight: '700', color: '#149E2D', textTransform: 'uppercase' },
-  folioText: { fontSize: 20, fontWeight: '800', color: '#000000' },
-  distanciaText: { fontSize: 14, color: '#555555', marginTop: 2 },
-  btnSolicitar: { backgroundColor: '#149E2D', borderRadius: 10, paddingVertical: 12, alignItems: 'center' },
-  btnSolicitarText: { color: '#FFFFFF', fontSize: 15, fontWeight: '700' },
-  matchMessage: { flexDirection: 'row', gap: 10, alignItems: 'center', paddingVertical: 7 },
-  emptyMessage: { color: '#555555', fontSize: 13, lineHeight: 19, marginVertical: 8 },
-  vehicleDetails: { borderTopWidth: 1, borderTopColor: '#EEEEEE', marginTop: 8, paddingTop: 8, gap: 3 },
-  seatLabel: { color: '#333333', fontSize: 12, fontWeight: '700', marginTop: 10, marginBottom: 6 },
-  seatSelector: { flexDirection: 'row', gap: 8, marginBottom: 9 },
-  seatOption: { width: 38, height: 34, borderRadius: 17, backgroundColor: '#F0F2F0', alignItems: 'center', justifyContent: 'center' },
-  seatOptionActive: { backgroundColor: '#149E2D' },
+  searchBar: { position: 'absolute', top: 14, height: 58, backgroundColor: '#FFFFFF', borderRadius: 18, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, elevation: 6, shadowColor: '#000000', shadowOpacity: 0.15, shadowRadius: 5 },
+  searchInput: { flex: 1, minWidth: 0, height: '100%', fontSize: 17, color: '#111111', marginLeft: 8 },
+  searchAction: { width: 44, height: 48, alignItems: 'center', justifyContent: 'center' },
+  gpsButton: { position: 'absolute', top: 84, width: 50, height: 50, borderRadius: 25, backgroundColor: '#FFFFFF', justifyContent: 'center', alignItems: 'center', elevation: 6 },
+  userHalo: { width: 26, height: 26, borderRadius: 13, backgroundColor: 'rgba(20,158,45,0.24)', borderColor: '#FFFFFF', borderWidth: 2, alignItems: 'center', justifyContent: 'center', elevation: 3 },
+  userDot: { width: 12, height: 12, borderRadius: 6, backgroundColor: USER_COLOR, borderColor: '#FFFFFF', borderWidth: 1 },
+  gpsNotice: { position: 'absolute', top: 144, padding: 13, backgroundColor: '#FFFFFF', borderRadius: 12, elevation: 3 },
+  gpsNoticeText: { color: '#333333', fontSize: 15, lineHeight: 21 },
+  tripCard: { position: 'absolute', backgroundColor: '#FFFFFF', borderRadius: 18, padding: 15, elevation: 8, shadowColor: '#000000', shadowOpacity: 0.16, shadowRadius: 8 },
+  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 3 },
+  closeButton: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
+  tripContent: { flexShrink: 1 },
+  tripContentInner: { paddingBottom: 8 },
+  cardTag: { flex: 1, fontSize: 14, fontWeight: '800', color: USER_COLOR, textTransform: 'uppercase' },
+  routeTitle: { fontSize: 21, fontWeight: '900', color: '#111111' },
+  bodyText: { color: '#444444', fontSize: 15, lineHeight: 22, marginTop: 5 },
+  steps: { borderLeftWidth: 3, borderLeftColor: '#D9E5DA', paddingLeft: 12, marginTop: 10, gap: 7 },
+  stepText: { color: '#333333', fontSize: 15, lineHeight: 21 },
+  totalTime: { color: '#111111', fontSize: 20, fontWeight: '900', marginTop: 10 },
+  loadingRow: { flexDirection: 'row', gap: 10, alignItems: 'center', paddingVertical: 10 },
+  errorText: { color: '#8A2E10', fontSize: 14, lineHeight: 20, marginVertical: 7 },
+  vehicleSection: { borderTopWidth: 1, borderTopColor: '#EEEEEE', marginTop: 10, paddingTop: 8 },
+  seatSelector: { flexDirection: 'row', gap: 8, marginTop: 8, marginBottom: 8 },
+  seatOption: { minWidth: 46, height: 46, borderRadius: 23, backgroundColor: '#F0F2F0', alignItems: 'center', justifyContent: 'center' },
+  seatOptionActive: { backgroundColor: USER_COLOR },
   seatOptionText: { color: '#333333', fontWeight: '800' },
   seatOptionTextActive: { color: '#FFFFFF' },
-  seatError: { color: '#B00020', fontSize: 12, marginBottom: 7 },
+  reserveButton: { backgroundColor: USER_COLOR, borderRadius: 12, minHeight: 50, paddingVertical: 13, alignItems: 'center', justifyContent: 'center' },
+  reserveButtonText: { color: '#FFFFFF', fontSize: 16, fontWeight: '800' },
   disabledButton: { opacity: 0.55 },
-  pendingMessage: { color: '#8A5B00', fontWeight: '700', marginTop: 8 },
-  acceptedMessage: { color: '#149E2D', fontWeight: '800', lineHeight: 20, marginVertical: 8 },
-  cancelButton: { minHeight: 40, alignItems: 'center', justifyContent: 'center' },
-  cancelText: { color: '#555555', fontWeight: '700', textDecorationLine: 'underline' },
-  retryButton: { padding: 10, alignItems: 'center' },
-  retryText: { color: '#149E2D', fontWeight: '800' },
+  cancelText: { color: '#555555', fontWeight: '700', textDecorationLine: 'underline', marginTop: 6 },
 });

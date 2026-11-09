@@ -17,7 +17,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { apiRequest } from '../servicios/apiService';
 
-export default function RegistroPantalla({ onVolver }) {
+export default function RegistroPantalla({ onVolver, onContinuarSinCuenta }) {
   const [nombreUsuario, setNombreUsuario] = useState('');
   const [apellidoUsuario, setApellidoUsuario] = useState('');
   const [correo, setCorreo] = useState('');
@@ -74,6 +74,7 @@ export default function RegistroPantalla({ onVolver }) {
     try {
       await apiRequest('/api/registro-usuario/', {
         method: 'POST',
+        skipAuth: true,
         body: JSON.stringify(payload),
       });
       setErrorMessage('');
@@ -117,7 +118,7 @@ export default function RegistroPantalla({ onVolver }) {
             >
               <View style={styles.tituloContenedor}>
                 <Text style={styles.titulo}>Registro de Usuario</Text>
-                <Text style={styles.subtitulo}>Crea tu cuenta para guardar tus viajes</Text>
+                <Text style={styles.subtitulo}>Crea una cuenta para guardar tus viajes. Registrarte es opcional para solicitar un match.</Text>
               </View>
 
               <View style={styles.formulario}>
@@ -200,6 +201,14 @@ export default function RegistroPantalla({ onVolver }) {
                 >
                   <Text style={styles.textoBotonVolver}>¿Ya tienes cuenta? Inicia Sesión</Text>
                 </TouchableOpacity>
+                {onContinuarSinCuenta ? (
+                  <TouchableOpacity
+                    style={styles.botonVolver}
+                    onPress={onContinuarSinCuenta}
+                  >
+                    <Text style={styles.textoBotonVolver}>Continuar como invitado sin registrarme</Text>
+                  </TouchableOpacity>
+                ) : null}
 
               </View>
             </ScrollView>

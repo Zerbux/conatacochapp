@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   FlatList,
+  Image,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -12,6 +13,7 @@ import {
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
 import MapView, { Marker, Polyline, PROVIDER_DEFAULT } from '../componentes/Mapa';
 import {
   COLORES,
@@ -31,7 +33,7 @@ import {
   StatusBadge,
 } from '../componentes/KitUI';
 import { DEMO_MODE, loginWithRole, logout as logoutSession } from '../servicios/authService';
-import { createRecord, listRecords, setRecordActive, updateRecord } from '../servicios/dataService';
+import { createRecord, listRecords, listRouteTraces, setRecordActive, updateRecord } from '../servicios/dataService';
 
 const REGION_LA_GRANJA = {
   latitude: -33.5385,
@@ -119,10 +121,13 @@ const MODULES = {
     toggleStatus: true,
     searchable: ['folio', 'nombre', 'origen', 'destino', 'estado'],
     fields: [
+      ['region_code', 'Código de región (RM = 13)'],
       ['folio', 'Folio'],
-      ['nombre', 'Nombre registrado'],
+      ['nombre', 'Nombre de itinerario'],
       ['origen', 'Origen'],
       ['destino', 'Destino'],
+      ['color_hex', 'Color HEX (#RRGGBB)'],
+      ['imagen', 'Imagen de la ruta'],
       ['descripcion', 'Descripción', 'default', true],
       ['estado', 'Estado'],
     ],
@@ -135,6 +140,7 @@ const MODULES = {
     fields: [
       ['ruta', 'Ruta', 'numeric'],
       ['sentido', 'Sentido (IDA / REGRESO)'],
+      ['tipo_trazado', 'Tipo (PRINCIPAL / ALTERNATIVO)'],
       ['orden', 'Orden del punto', 'numeric'],
       ['calle', 'Calle'],
       ['latitud', 'Latitud GPS', 'numeric'],
@@ -220,6 +226,40 @@ const MODULES = {
     filters: ['TODOS', 'NO_LEIDA', 'LEIDA'],
     readOnly: true,
   },
+};
+
+const FIELD_OPTIONS = {
+  'usuarios.tipo_usuario': [
+    { value: 'ADMIN', label: 'Administrador' },
+    { value: 'CONDUCTOR', label: 'Conductor' },
+    { value: 'REGISTRADO', label: 'Registrado' },
+    { value: 'TEMPORAL', label: 'Temporal' },
+  ],
+  'licencias.clase': [
+    { value: 'A2', label: 'A2' },
+    { value: 'A3', label: 'A3' },
+    { value: 'A2_A3', label: 'Ambas' },
+  ],
+  'usuarios.is_active': [
+    { value: 'true', label: 'Sí' },
+    { value: 'false', label: 'No' },
+  ],
+  'conductores.biometria_activa': [
+    { value: 'true', label: 'Sí' },
+    { value: 'false', label: 'No' },
+  ],
+  'vehiculos.maletero_ocupado': [
+    { value: 'true', label: 'Sí' },
+    { value: 'false', label: 'No' },
+  ],
+  'vehiculos.en_servicio': [
+    { value: 'true', label: 'Sí' },
+    { value: 'false', label: 'No' },
+  ],
+  'vehiculoRuta.activo': [
+    { value: 'true', label: 'Sí' },
+    { value: 'false', label: 'No' },
+  ],
 };
 
 const CATEGORY_MODULES = {
@@ -483,18 +523,28 @@ function RecordForm({ visible, module, record, onCancel, onSave }) {
   const initialValues = useMemo(() => {
     if (!module) return {};
     if (record) return { ...record };
-    return Object.fromEntries((module.fields || []).map(([key]) => [key, '']));
+    const values = Object.fromEntries((module.fields || []).map(([key]) => [key, '']));
+    if (module.collection === 'rutas') {
+      values.region_code = '13';
+      values.color_hex = '#1565C0';
+    }
+    if (module.collection === 'trazadosRuta') values.tipo_trazado = 'PRINCIPAL';
+    return values;
   }, [module, record]);
   const [values, setValues] = useState(initialValues);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const [referenceOptions, setReferenceOptions] = useState({});
   const [openReference, setOpenReference] = useState(null);
+  const [imageAsset, setImageAsset] = useState(null);
+  const [removeImage, setRemoveImage] = useState(false);
 
   useEffect(() => {
     setValues(initialValues);
     setError('');
     setOpenReference(null);
+    setImageAsset(null);
+    setRemoveImage(false);
   }, [initialValues, visible]);
 
   useEffect(() => {
@@ -517,8 +567,26 @@ function RecordForm({ visible, module, record, onCancel, onSave }) {
 
   if (!module) return null;
 
+  const chooseRouteImage = async () => {
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: true,
+        aspect: [16, 9],
+        quality: 0.82,
+      });
+      if (!result.canceled && result.assets?.[0]) {
+        setImageAsset(result.assets[0]);
+        setRemoveImage(false);
+        setError('');
+      }
+    } catch (pickerError) {
+      setError(pickerError.message || 'No se pudo abrir la galería de imágenes.');
+    }
+  };
+
   const save = async () => {
-    const optionalFields = new Set(['estado', 'telefono', 'fono_fijo', 'fono_emergencia', 'descripcion', 'biometria_activa', 'activo', 'is_active', 'conductor', 'password']);
+    const optionalFields = new Set(['estado', 'telefono', 'fono_fijo', 'fono_emergencia', 'descripcion', 'biometria_activa', 'activo', 'is_active', 'conductor', 'password', 'latitud', 'longitud', 'imagen']);
     const required = (module.fields || []).filter(([key]) =>
       !optionalFields.has(key) && !(record && key === 'password'));
     if (required.some(([key]) => values[key] == null || String(values[key]).trim() === '')) {
@@ -557,8 +625,8 @@ function RecordForm({ visible, module, record, onCancel, onSave }) {
       return;
     }
     if (module.collection === 'licencias') {
-      if (!['A2', 'A3'].includes(String(values.clase).toUpperCase())) {
-        setError('La clase de licencia debe ser A2 o A3.');
+      if (!['A2', 'A3', 'A2_A3'].includes(String(values.clase).toUpperCase())) {
+        setError('La clase de licencia debe ser A2, A3 o Ambas.');
         return;
       }
       if (!DEMO_MODE && !/^\d+$/.test(String(values.conductor))) {
@@ -577,6 +645,16 @@ function RecordForm({ visible, module, record, onCancel, onSave }) {
         setError('Las fechas deben usar el formato AAAA-MM-DD.');
         return;
       }
+      const today = new Date();
+      const todayString = [
+        today.getFullYear(),
+        String(today.getMonth() + 1).padStart(2, '0'),
+        String(today.getDate()).padStart(2, '0'),
+      ].join('-');
+      if (values.fecha_vencimiento <= todayString) {
+        setError('La fecha de vencimiento debe ser posterior a la fecha actual.');
+        return;
+      }
     }
     if (module.collection === 'solicitudes') {
       const seats = Number(values.asientos);
@@ -591,10 +669,16 @@ function RecordForm({ visible, module, record, onCancel, onSave }) {
       }
     }
     if (module.collection === 'trazadosRuta') {
-      const latitude = Number(values.latitud);
-      const longitude = Number(values.longitud);
+      const hasLatitude = values.latitud !== '' && values.latitud != null;
+      const hasLongitude = values.longitud !== '' && values.longitud != null;
+      const latitude = hasLatitude ? Number(values.latitud) : null;
+      const longitude = hasLongitude ? Number(values.longitud) : null;
       if (!['IDA', 'REGRESO'].includes(String(values.sentido).toUpperCase())) {
         setError('El sentido debe ser IDA o REGRESO.');
+        return;
+      }
+      if (!['PRINCIPAL', 'ALTERNATIVO'].includes(String(values.tipo_trazado || 'PRINCIPAL').toUpperCase())) {
+        setError('El tipo de trazado debe ser PRINCIPAL o ALTERNATIVO.');
         return;
       }
       if ((!DEMO_MODE && !Number.isInteger(Number(values.ruta))) ||
@@ -602,17 +686,29 @@ function RecordForm({ visible, module, record, onCancel, onSave }) {
         setError('Selecciona una ruta e indica un orden entero mayor que cero.');
         return;
       }
-      if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90 ||
-          !Number.isFinite(longitude) || longitude < -180 || longitude > 180) {
+      if (hasLatitude !== hasLongitude || (hasLatitude && (
+          !Number.isFinite(latitude) || latitude < -90 || latitude > 90 ||
+          !Number.isFinite(longitude) || longitude < -180 || longitude > 180
+      ))) {
         setError('Ingresa coordenadas GPS válidas.');
         return;
       }
+    }
+
+    if (module.collection === 'rutas' && !/^#[0-9A-Fa-f]{6}$/.test(String(values.color_hex || ''))) {
+      setError('El color debe usar formato HEX, por ejemplo #1565C0.');
+      return;
     }
 
     setSaving(true);
     setError('');
     try {
       const payload = { ...values };
+      if (module.collection === 'rutas') {
+        delete payload.imagen;
+        if (imageAsset) payload.imagen_archivo = imageAsset;
+        if (removeImage) payload.eliminar_imagen = true;
+      }
       if (module.collection === 'vehiculos') {
         for (const key of ['capacidad', 'asientos_disponibles', 'anio']) {
           if (payload[key] === '' && record) delete payload[key];
@@ -645,9 +741,10 @@ function RecordForm({ visible, module, record, onCancel, onSave }) {
       if (module.collection === 'trazadosRuta') {
         payload.ruta = toReferenceId(payload.ruta);
         payload.sentido = String(payload.sentido).toUpperCase();
+        payload.tipo_trazado = String(payload.tipo_trazado || 'PRINCIPAL').toUpperCase();
         payload.orden = Number(payload.orden);
-        payload.latitud = Number(payload.latitud);
-        payload.longitud = Number(payload.longitud);
+        payload.latitud = payload.latitud === '' || payload.latitud == null ? null : Number(payload.latitud);
+        payload.longitud = payload.longitud === '' || payload.longitud == null ? null : Number(payload.longitud);
       }
       if (module.collection === 'emergencias') {
         for (const key of ['conductor', 'vehiculo']) {
@@ -687,6 +784,58 @@ function RecordForm({ visible, module, record, onCancel, onSave }) {
             {(module.fields || []).map(([key, label, keyboardType, multiline]) => {
               const collection = RELATION_FIELDS[module.collection]?.[key];
               const options = collection ? referenceOptions[collection] || [] : [];
+              const fieldOptions = FIELD_OPTIONS[`${module.collection}.${key}`];
+              if (module.collection === 'rutas' && key === 'imagen') {
+                const imageUri = imageAsset?.uri || (!removeImage ? values.imagen : null);
+                return (
+                  <View key={key} style={styles.referenceField}>
+                    <Text style={styles.fieldLabel}>{label}</Text>
+                    {imageUri ? <Image source={{ uri: imageUri }} style={styles.routeImagePreview} resizeMode="cover" /> : (
+                      <View style={styles.routeImageEmpty}><Ionicons name="image-outline" size={24} color={COLORES.gris} /><Text style={styles.secondaryText}>Sin imagen seleccionada</Text></View>
+                    )}
+                    <View style={styles.routeImageActions}>
+                      <SecondaryButton title={imageUri ? 'Cambiar imagen' : 'Subir imagen'} icon="image-outline" onPress={chooseRouteImage} />
+                      {imageUri ? <TouchableOpacity accessibilityRole="button" onPress={() => { setImageAsset(null); setRemoveImage(Boolean(record?.imagen)); }}><Text style={styles.routeImageRemove}>Quitar imagen</Text></TouchableOpacity> : null}
+                    </View>
+                    <Text style={styles.secondaryText}>JPG, PNG o WebP · máximo 8 MB</Text>
+                  </View>
+                );
+              }
+              if (fieldOptions) {
+                const selected = fieldOptions.find((option) => option.value === String(values[key]));
+                return (
+                  <View key={key} style={styles.referenceField}>
+                    <Text style={styles.fieldLabel}>{label}</Text>
+                    <TouchableOpacity
+                      accessibilityRole="button"
+                      accessibilityLabel={`Seleccionar ${label}`}
+                      style={styles.referenceButton}
+                      onPress={() => setOpenReference(openReference === key ? null : key)}
+                    >
+                      <Text style={styles.referenceValue}>
+                        {selected ? selected.label : 'Seleccionar opción'}
+                      </Text>
+                      <Ionicons name="chevron-down" size={18} color={COLORES.gris} />
+                    </TouchableOpacity>
+                    {openReference === key ? (
+                      <View style={styles.referenceOptions}>
+                        {fieldOptions.map((option) => (
+                          <TouchableOpacity
+                            key={option.value}
+                            style={styles.referenceOption}
+                            onPress={() => {
+                              setValues((current) => ({ ...current, [key]: option.value }));
+                              setOpenReference(null);
+                            }}
+                          >
+                            <Text style={styles.referenceValue}>{option.label}</Text>
+                          </TouchableOpacity>
+                        ))}
+                      </View>
+                    ) : null}
+                  </View>
+                );
+              }
               if (!collection) {
                 return (
                   <Field
@@ -782,7 +931,7 @@ function RecordCard({ item, module, licenseDriverName, onOpen, onEdit, onToggle,
     licencias: [licenseDriverName || `Conductor #${item.conductor}`, `Vence ${item.fecha_vencimiento || 'sin fecha'}`, item.estado],
     vehiculos: [item.marca, item.modelo, item.conductor_nombre, item.estado],
     rutas: [item.origen, item.destino, item.estado],
-    trazadosRuta: [`${item.sentido || ''} · orden ${item.orden ?? ''}`, `Ruta #${item.ruta}`],
+    trazadosRuta: [`${item.sentido || ''} · ${item.tipo_trazado || 'PRINCIPAL'} · orden ${item.orden ?? ''}`, `Ruta #${item.ruta}`],
     vehiculoRuta: [`Folio ${item.folio || item.ruta}`, item.activo === false ? 'INACTIVA' : 'ACTIVA'],
     solicitudes: [item.pasajero, item.ruta_nombre || (item.ruta ? `Ruta #${item.ruta}` : null), item.estado],
     viajes: [item.pasajero, item.conductor, item.estado],
@@ -858,7 +1007,9 @@ function AdminModuleScreen({ moduleId, onBack, onDetail, onOpenRouteMap, related
     setLoading(true);
     setError('');
     try {
-      const loadedRecords = await listRecords(module.collection);
+      const loadedRecords = moduleId === 'trazadosRuta' && relatedFilter?.field === 'ruta'
+        ? await listRouteTraces(relatedFilter.value)
+        : await listRecords(module.collection);
       setRecords(loadedRecords);
       if (moduleId === 'licencias') {
         try {
@@ -876,7 +1027,7 @@ function AdminModuleScreen({ moduleId, onBack, onDetail, onOpenRouteMap, related
     } finally {
       setLoading(false);
     }
-  }, [module.collection, moduleId]);
+  }, [module.collection, moduleId, relatedFilter?.field, relatedFilter?.value]);
 
   useEffect(() => { Promise.resolve().then(load); }, [load]);
 
@@ -1086,7 +1237,22 @@ function AdminRecordDetail({ moduleId, record, onBack, onOpen, onOpenRelated, on
       <Text style={styles.detailValue}>{value == null || value === '' ? 'No disponible' : String(value)}</Text>
     </View>
   );
-  const entries = Object.entries(record).filter(([key]) => !['coordenadasIda', 'coordenadasRegreso', 'geometriaVerificada', 'trazados'].includes(key));
+  const routeStreets = (direction, type = 'PRINCIPAL') => {
+    const key = direction === 'IDA'
+      ? (type === 'PRINCIPAL' ? 'calles_ida' : 'calles_ida_alternativa')
+      : (type === 'PRINCIPAL' ? 'calles_regreso' : 'calles_regreso_alternativa');
+    const camel = direction === 'IDA'
+      ? (type === 'PRINCIPAL' ? 'callesIda' : 'callesIdaAlternativa')
+      : (type === 'PRINCIPAL' ? 'callesRegreso' : 'callesRegresoAlternativa');
+    const streets = record[camel] || record[key];
+    return streets?.length ? streets : (record.trazados || [])
+      .filter((point) => point.sentido === direction && (point.tipo_trazado || 'PRINCIPAL') === type)
+      .map((point) => point.calle);
+  };
+  const entries = Object.entries(record).filter(([key]) => ![
+    'coordenadasIda', 'coordenadasRegreso', 'geometriaVerificada', 'trazados',
+    'calles_ida', 'calles_regreso', 'calles_ida_alternativa', 'calles_regreso_alternativa',
+  ].includes(key));
 
   return (
     <Page title={`Detalle · ${module.title}`} subtitle={String(record.id || '')} onBack={onBack}>
@@ -1132,18 +1298,21 @@ function AdminRecordDetail({ moduleId, record, onBack, onOpen, onOpenRelated, on
           {renderValue('Nombre', record.nombre)}
           {renderValue('Origen', record.origen)}
           {renderValue('Destino', record.destino)}
+          {renderValue('Color', record.color_hex)}
           {renderValue('Geometría GPS', record.geometriaVerificada ? 'Verificada' : 'Pendiente de validación')}
           <SecondaryButton title="Ver trazado de ruta" icon="map-outline" onPress={() => onOpenRouteMap(record)} />
           <SecondaryButton title="Administrar puntos del trazado" icon="git-branch-outline" onPress={() => onOpenRelated('trazadosRuta', 'ruta', record.id)} />
           <SecondaryButton title="Vehículos asociados" icon="car-outline" onPress={() => onOpenRelated('vehiculoRuta', 'ruta', record.id)} />
           <Text style={styles.sectionTitle}>Calles de ida (orden recibido)</Text>
-          {(record.callesIda?.length ? record.callesIda : (record.trazados || []).filter((point) => point.sentido === 'IDA').map((point) => point.calle)).length ? (record.callesIda?.length ? record.callesIda : (record.trazados || []).filter((point) => point.sentido === 'IDA').map((point) => point.calle)).map((street, index) => (
+          {routeStreets('IDA').length ? routeStreets('IDA').map((street, index) => (
             <Text key={`ida-${index}`} style={styles.streetItem}>{index + 1}. {street}</Text>
           )) : <EmptyState title="Calles de ida no disponibles" />}
           <Text style={styles.sectionTitle}>Calles de regreso (orden recibido)</Text>
-          {(record.callesRegreso?.length ? record.callesRegreso : (record.trazados || []).filter((point) => point.sentido === 'REGRESO').map((point) => point.calle)).length ? (record.callesRegreso?.length ? record.callesRegreso : (record.trazados || []).filter((point) => point.sentido === 'REGRESO').map((point) => point.calle)).map((street, index) => (
+          {routeStreets('REGRESO').length ? routeStreets('REGRESO').map((street, index) => (
             <Text key={`retorno-${index}`} style={styles.streetItem}>{index + 1}. {street}</Text>
           )) : <EmptyState title="Calles de regreso no disponibles" />}
+          {routeStreets('IDA', 'ALTERNATIVO').length ? <><Text style={styles.sectionTitle}>Calles alternativas de ida</Text>{routeStreets('IDA', 'ALTERNATIVO').map((street, index) => <Text key={`ida-alt-${index}`} style={styles.streetItem}>{index + 1}. {street}</Text>)}</> : null}
+          {routeStreets('REGRESO', 'ALTERNATIVO').length ? <><Text style={styles.sectionTitle}>Calles alternativas de regreso</Text>{routeStreets('REGRESO', 'ALTERNATIVO').map((street, index) => <Text key={`regreso-alt-${index}`} style={styles.streetItem}>{index + 1}. {street}</Text>)}</> : null}
         </>
       ) : null}
       {moduleId === 'vehiculoRuta' ? (
@@ -1189,28 +1358,27 @@ function AdminRouteMap({ route, onBack }) {
   const [traceError, setTraceError] = useState('');
 
   useEffect(() => {
-    if (!DEMO_MODE) {
-      setTraces(route?.trazados || []);
-      return undefined;
-    }
     let mounted = true;
     setTraceError('');
-    listRecords('trazadosRuta')
-      .then((records) => {
-        if (mounted) setTraces(records.filter((point) => String(point.ruta) === String(route?.id)));
-      })
+    listRouteTraces(route?.id)
+      .then((records) => { if (mounted) setTraces(records); })
       .catch((loadError) => {
         if (mounted) setTraceError(loadError.message || 'No se pudieron cargar los puntos del trazado.');
       });
     return () => { mounted = false; };
   }, [route?.id]);
 
-  const coordinates = (direction) => traces
-    .filter((point) => point.sentido === direction)
-    .map((point) => ({ latitude: Number(point.latitud), longitude: Number(point.longitud) }))
-    .filter((point) => Number.isFinite(point.latitude) && Number.isFinite(point.longitude));
+  const coordinates = (direction, type = 'PRINCIPAL') => {
+    const path = traces
+      .filter((point) => point.sentido === direction && (point.tipo_trazado || 'PRINCIPAL') === type)
+      .sort((left, right) => left.orden - right.orden || left.id - right.id);
+    if (path.length < 2 || path.some((point) => point.latitud == null || point.longitud == null)) return [];
+    return path.map((point) => ({ latitude: Number(point.latitud), longitude: Number(point.longitud) }));
+  };
   const ida = route?.coordenadasIda?.length ? route.coordenadasIda : coordinates('IDA');
   const regreso = route?.coordenadasRegreso?.length ? route.coordenadasRegreso : coordinates('REGRESO');
+  const idaAlt = coordinates('IDA', 'ALTERNATIVO');
+  const regresoAlt = coordinates('REGRESO', 'ALTERNATIVO');
   return (
     <Screen>
       <Header title={`Trazado · ${route?.folio || ''}`} subtitle="Visualización sin editar coordenadas" onBack={onBack} />
@@ -1223,14 +1391,16 @@ function AdminRouteMap({ route, onBack }) {
           </DemoBanner>
         </View>
         <MapView provider={PROVIDER_DEFAULT} style={styles.routeMap} initialRegion={REGION_LA_GRANJA}>
-          {ida.length > 1 ? <Polyline coordinates={ida} strokeColor={COLORES.verde} strokeWidth={6} /> : null}
-          {regreso.length > 1 ? <Polyline coordinates={regreso} strokeColor="#2878D7" strokeWidth={5} lineDashPattern={[6, 6]} /> : null}
+          {ida.length > 1 ? <Polyline coordinates={ida} strokeColor={route?.color_hex} strokeWidth={6} /> : null}
+          {regreso.length > 1 ? <Polyline coordinates={regreso} strokeColor={route?.color_hex} strokeWidth={5} lineDashPattern={[6, 6]} /> : null}
+          {idaAlt.length > 1 ? <Polyline coordinates={idaAlt} strokeColor={route?.color_hex} strokeWidth={4} lineDashPattern={[3, 6]} /> : null}
+          {regresoAlt.length > 1 ? <Polyline coordinates={regresoAlt} strokeColor={route?.color_hex} strokeWidth={4} lineDashPattern={[3, 6]} /> : null}
         </MapView>
         <ScrollView style={styles.mapRouteInfo} contentContainerStyle={styles.mapRouteInfoContent}>
           <Text style={styles.sectionTitle}>Folio {route?.folio}</Text>
           <Text style={styles.secondaryText}>Origen/destino y trazado GPS: solo mostrar cuando existan datos confiables.</Text>
           <Text style={styles.bodyText}>Los puntos GPS no se modifican ni interpolan automáticamente.</Text>
-          <Text style={styles.bodyText}>Puntos GPS ida: {ida.length} · regreso: {regreso.length}</Text>
+          <Text style={styles.bodyText}>Puntos GPS principal ida/regreso: {ida.length}/{regreso.length} · alternativo: {idaAlt.length}/{regresoAlt.length}</Text>
           <Text style={styles.sectionTitle}>Calles de ida</Text>
           {(route?.callesIda?.length ? route.callesIda : (route?.trazados || []).filter((point) => point.sentido === 'IDA').map((point) => point.calle)).length ? (route?.callesIda?.length ? route.callesIda : (route?.trazados || []).filter((point) => point.sentido === 'IDA').map((point) => point.calle)).map((street, index) => (
             <Text key={`ida-${index}`} style={styles.streetItem}>{index + 1}. {street}</Text>
@@ -1515,6 +1685,10 @@ const styles = StyleSheet.create({
   modalHeading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },
   modalTitle: { color: '#111111', fontSize: 18, fontWeight: '800', flex: 1 },
   formCancel: { marginTop: 8 },
+  routeImagePreview: { width: '100%', height: 170, borderRadius: 10, backgroundColor: '#EDF0ED' },
+  routeImageEmpty: { width: '100%', height: 110, borderRadius: 10, backgroundColor: '#EDF0ED', alignItems: 'center', justifyContent: 'center', gap: 6 },
+  routeImageActions: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 6 },
+  routeImageRemove: { color: '#B00020', fontWeight: '700', padding: 10 },
   referenceField: { marginBottom: 12 },
   referenceButton: {
     minHeight: 48,

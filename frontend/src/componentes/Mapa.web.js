@@ -16,6 +16,10 @@ export function Marker() {
   return null;
 }
 
+export function Circle() {
+  return null;
+}
+
 export function Polyline() {
   return null;
 }

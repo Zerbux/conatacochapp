@@ -1,13 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, StyleSheet, View, Text, TouchableOpacity, StatusBar, Platform } from 'react-native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ensureTemporarySession } from './src/servicios/guestSessionService';
 import { logout as logoutSession } from './src/servicios/authService';
 
 // IMPORTACIONES DE TODAS LAS PANTALLAS (AquÃ­ estÃ¡ la clave del error)
 import InicioUsuarioPantalla from './src/pantallas/InicioUsuarioPantalla';
-import RutasPantalla from './src/pantallas/RutasPantalla';
 import ReservasPantalla from './src/pantallas/ReservasPantalla';
 import PerfilPantalla from './src/pantallas/PerfilPantalla';
 import LoginPantalla from './src/pantallas/LoginPantalla'; 
@@ -16,6 +15,11 @@ import InicioChoferPantalla from './src/choferes/InicioChoferPantalla';
 import AdminNavigator from './src/administrador/AdminNavigator';
 
 export default function App() {
+  return <SafeAreaProvider><AppContent /></SafeAreaProvider>;
+}
+
+function AppContent() {
+  const insets = useSafeAreaInsets();
   const [pantallaActual, setPantallaActual] = useState('inicio');
   const [areaActual, setAreaActual] = useState('pasajero');
   const [usuarioActual, setUsuarioActual] = useState(null);
@@ -29,6 +33,7 @@ export default function App() {
       setSessionReady(true);
     } catch (error) {
       setSessionError(error.message || 'No fue posible iniciar la sesion temporal.');
+      setSessionReady(true);
     }
   };
 
@@ -37,6 +42,7 @@ export default function App() {
   }, []);
 
   const manejarLogin = (usuario) => {
+    setSessionError('');
     const rol = String(usuario?.tipo_usuario || '').toUpperCase();
     if (rol === 'CONDUCTOR') {
       if (usuario.modo !== 'MOCK' && !usuario.key && !usuario.access && !usuario.access_token) {
@@ -89,8 +95,7 @@ export default function App() {
 
   if (!sessionReady) {
     return (
-      <SafeAreaProvider>
-        <View style={styles.sessionLoading}>
+      <View style={styles.sessionLoading}>
           {sessionError ? (
             <>
               <Text style={styles.sessionError}>{sessionError}</Text>
@@ -104,15 +109,21 @@ export default function App() {
               <Text style={styles.sessionLoadingText}>Preparando sesion...</Text>
             </>
           )}
-        </View>
-      </SafeAreaProvider>
+      </View>
     );
   }
 
   return (
-    <SafeAreaProvider>
       <View style={styles.container}>
-        <StatusBar barStyle="light-content" backgroundColor="#000000" />
+        <StatusBar barStyle="light-content" />
+        {sessionError ? (
+          <View style={styles.sessionNotice}>
+            <Text style={styles.sessionNoticeText}>{sessionError}</Text>
+            <TouchableOpacity style={styles.sessionNoticeButton} onPress={initializeSession}>
+              <Text style={styles.sessionNoticeButtonText}>Reintentar</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
 
         {/* Contenedor principal de las vistas */}
         <View style={styles.content}>
@@ -123,7 +134,6 @@ export default function App() {
           ) : (
             <>
               {pantallaActual === 'inicio' && <InicioUsuarioPantalla usuarioActual={usuarioActual} />}
-              {pantallaActual === 'rutas' && <RutasPantalla />}
               {pantallaActual === 'reservas' && <ReservasPantalla />}
               {pantallaActual === 'perfil' && <PerfilPantalla user={usuarioActual} onLoginPress={() => setPantallaActual('login')} onLogout={cerrarSesionPasajero} />}
               {pantallaActual === 'login' && (
@@ -136,7 +146,23 @@ export default function App() {
                 />
               )}
               {pantallaActual === 'registro' && (
-                <RegistroPantalla onVolver={() => setPantallaActual('login')} />
+                <RegistroPantalla
+                  onVolver={() => setPantallaActual('login')}
+                  onContinuarSinCuenta={async () => {
+                    try {
+                      await logoutSession();
+                      await ensureTemporarySession();
+                      setUsuarioActual(null);
+                      setAreaActual('pasajero');
+                      setPantallaActual('inicio');
+                    } catch (error) {
+                      Alert.alert(
+                        'No se pudo continuar como invitado',
+                        error.message || 'No fue posible iniciar la sesión temporal.',
+                      );
+                    }
+                  }}
+                />
               )}
             </>
           )}
@@ -145,7 +171,7 @@ export default function App() {
         {/* Navbar Flotante sobre el Mapa sin Fondo Negro */}
         {/* Ocultamos el navbar si estamos en la pantalla de login */}
         {areaActual === 'pasajero' && pantallaActual !== 'login' && (
-          <View style={styles.navbar}>
+          <View style={[styles.navbar, { paddingBottom: Math.max(insets.bottom, Platform.OS === 'ios' ? 16 : 12) }]}>
             <TouchableOpacity style={styles.navItem} onPress={() => setPantallaActual('inicio')}>
               <Ionicons 
                 name={pantallaActual === 'inicio' ? "home" : "home-outline"} 
@@ -157,16 +183,7 @@ export default function App() {
               </Text>
             </TouchableOpacity>
 
-            <TouchableOpacity style={styles.navItem} onPress={() => setPantallaActual('rutas')}>
-              <MaterialCommunityIcons 
-                name="map-outline" 
-                size={24} 
-                color={pantallaActual === 'rutas' ? "#149E2D" : "#000000"} 
-              />
-              <Text style={[styles.navText, pantallaActual === 'rutas' && styles.navTextActivo]}>
-                Rutas
-              </Text>
-            </TouchableOpacity>
+
 
             <TouchableOpacity style={styles.navItem} onPress={() => setPantallaActual('reservas')}>
               <MaterialCommunityIcons 
@@ -192,7 +209,6 @@ export default function App() {
           </View>
         )}
       </View>
-    </SafeAreaProvider>
   );
 }
 
@@ -200,6 +216,10 @@ const styles = StyleSheet.create({
   sessionLoading: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, backgroundColor: '#FFFFFF' },
   sessionLoadingText: { marginTop: 12, color: '#333333', fontSize: 15 },
   sessionError: { color: '#B00020', fontSize: 15, textAlign: 'center', marginBottom: 14 },
+  sessionNotice: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFF3CD', paddingHorizontal: 12, paddingVertical: 9 },
+  sessionNoticeText: { flex: 1, color: '#734D00', fontSize: 12, marginRight: 10 },
+  sessionNoticeButton: { backgroundColor: '#149E2D', borderRadius: 6, paddingHorizontal: 10, paddingVertical: 8 },
+  sessionNoticeButtonText: { color: '#FFFFFF', fontSize: 12, fontWeight: '700' },
   sessionRetry: { backgroundColor: '#149E2D', borderRadius: 8, paddingHorizontal: 20, paddingVertical: 12 },
   sessionRetryText: { color: '#FFFFFF', fontWeight: '700' },
   container: {
@@ -219,7 +239,7 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 18,
     borderTopRightRadius: 18,
     paddingTop: 10,
-    paddingBottom: Platform.OS === 'ios' ? 24 : 12,
+
     paddingHorizontal: 12,
     justifyContent: 'space-around',
     alignItems: 'center',
@@ -232,10 +252,11 @@ const styles = StyleSheet.create({
   navItem: {
     alignItems: 'center',
     justifyContent: 'center',
+    minHeight: 56,
     flex: 1,
   },
   navText: {
-    fontSize: 12,
+    fontSize: 14,
     color: '#000000',
     marginTop: 2,
     fontWeight: '500',

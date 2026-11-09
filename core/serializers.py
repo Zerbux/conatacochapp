@@ -1,3 +1,4 @@
+from django.utils import timezone
 from rest_framework import serializers
 
 from .models import (
@@ -104,6 +105,17 @@ class LicenciaSerializer(serializers.ModelSerializer):
         model = Licencia
         fields = ['id', 'conductor', 'fecha_emision', 'comuna_emision', 'fecha_vencimiento', 'clase', 'estado']
 
+    def validate(self, attrs):
+        fecha_vencimiento = attrs.get(
+            'fecha_vencimiento',
+            getattr(self.instance, 'fecha_vencimiento', None),
+        )
+        if fecha_vencimiento and fecha_vencimiento <= timezone.localdate():
+            raise serializers.ValidationError({
+                'fecha_vencimiento': 'La fecha de vencimiento debe ser posterior a la fecha actual.',
+            })
+        return attrs
+
 
 class VehiculoSerializer(serializers.ModelSerializer):
     conductor_nombre = serializers.SerializerMethodField()
@@ -132,17 +144,121 @@ class VehiculoSerializer(serializers.ModelSerializer):
 
 
 class TrazadoRutaSerializer(serializers.ModelSerializer):
+    def validate(self, attrs):
+        latitude = attrs.get('latitud', getattr(self.instance, 'latitud', None))
+        longitude = attrs.get('longitud', getattr(self.instance, 'longitud', None))
+        if (latitude is None) != (longitude is None):
+            raise serializers.ValidationError('Latitud y longitud deben informarse juntas.')
+        if latitude is not None and not (-90 <= float(latitude) <= 90):
+            raise serializers.ValidationError({'latitud': 'Debe estar entre -90 y 90.'})
+        if longitude is not None and not (-180 <= float(longitude) <= 180):
+            raise serializers.ValidationError({'longitud': 'Debe estar entre -180 y 180.'})
+        return attrs
+
     class Meta:
         model = TrazadoRuta
-        fields = ['id', 'ruta', 'sentido', 'orden', 'calle', 'latitud', 'longitud']
+        fields = ['id', 'ruta', 'sentido', 'tipo_trazado', 'orden', 'calle', 'latitud', 'longitud']
+        extra_kwargs = {'latitud': {'required': False, 'allow_null': True}, 'longitud': {'required': False, 'allow_null': True}}
+
+
+class CoordinateSerializer(serializers.Serializer):
+    latitud = serializers.FloatField(min_value=-90, max_value=90)
+    longitud = serializers.FloatField(min_value=-180, max_value=180)
+
+
+class TripPlanningSerializer(serializers.Serializer):
+    origen = CoordinateSerializer()
+    destino = CoordinateSerializer()
 
 
 class RutaSerializer(serializers.ModelSerializer):
+    imagen = serializers.FileField(required=False, allow_null=True)
+    eliminar_imagen = serializers.BooleanField(write_only=True, required=False, default=False)
     trazados = TrazadoRutaSerializer(many=True, read_only=True)
+
+    def validate(self, attrs):
+        if self.instance is None and not attrs.get('region_code'):
+            raise serializers.ValidationError({'region_code': 'Indica el codigo regional de la ruta.'})
+        uploaded = attrs.get('imagen')
+        if uploaded:
+            if uploaded.size > 8 * 1024 * 1024:
+                raise serializers.ValidationError({'imagen': 'La imagen no puede superar 8 MB.'})
+            extension = uploaded.name.rsplit('.', 1)[-1].lower() if '.' in uploaded.name else ''
+            header = uploaded.read(12)
+            uploaded.seek(0)
+            valid_image = (
+                (extension in ('jpg', 'jpeg') and header.startswith(bytes((255, 216, 255))))
+                or (extension == 'png' and header.startswith(b'\x89PNG\r\n\x1a\n'))
+                or (extension == 'webp' and header[:4] == b'RIFF' and header[8:12] == b'WEBP')
+            )
+            if not valid_image:
+                raise serializers.ValidationError({'imagen': 'Sube una imagen JPG, PNG o WebP valida.'})
+        return attrs
+
+    def create(self, validated_data):
+        validated_data.pop('eliminar_imagen', None)
+        return super().create(validated_data)
+
+    def update(self, instance, validated_data):
+        remove_image = validated_data.pop('eliminar_imagen', False)
+        old_image_name = instance.imagen.name if instance.imagen else None
+        if remove_image and not validated_data.get('imagen'):
+            validated_data['imagen'] = None
+        updated = super().update(instance, validated_data)
+        new_image_name = updated.imagen.name if updated.imagen else None
+        if old_image_name and old_image_name != new_image_name:
+            instance.imagen.storage.delete(old_image_name)
+        return updated
 
     class Meta:
         model = Ruta
-        fields = ['id', 'folio', 'nombre', 'origen', 'destino', 'descripcion', 'estado', 'trazados']
+        fields = [
+            'id', 'region_code', 'folio', 'nombre', 'origen', 'destino',
+            'descripcion', 'estado', 'color_hex', 'imagen', 'geometry', 'eliminar_imagen', 'trazados',
+        ]
+
+
+class RutaListaSerializer(serializers.ModelSerializer):
+    calles_ida = serializers.SerializerMethodField()
+    calles_regreso = serializers.SerializerMethodField()
+    calles_ida_alternativa = serializers.SerializerMethodField()
+    calles_regreso_alternativa = serializers.SerializerMethodField()
+    trazados = serializers.SerializerMethodField()
+
+    def _points(self, route):
+        points = getattr(route, 'puntos_lista', None)
+        return points if points is not None else list(route.trazados.all())
+
+    def get_calles_ida(self, route):
+        return [p.calle for p in self._points(route) if p.sentido == 'IDA' and p.tipo_trazado == 'PRINCIPAL']
+
+    def get_calles_regreso(self, route):
+        return [p.calle for p in self._points(route) if p.sentido == 'REGRESO' and p.tipo_trazado == 'PRINCIPAL']
+
+    def get_calles_ida_alternativa(self, route):
+        return [p.calle for p in self._points(route) if p.sentido == 'IDA' and p.tipo_trazado == 'ALTERNATIVO']
+
+    def get_calles_regreso_alternativa(self, route):
+        return [p.calle for p in self._points(route) if p.sentido == 'REGRESO' and p.tipo_trazado == 'ALTERNATIVO']
+
+    def get_trazados(self, route):
+        paths = {}
+        for point in self._points(route):
+            paths.setdefault((point.tipo_trazado, point.sentido), []).append(point)
+        complete_paths = [
+            point
+            for points in paths.values()
+            if len(points) > 1 and all(p.latitud is not None and p.longitud is not None for p in points)
+            for point in points
+        ]
+        return TrazadoRutaSerializer(complete_paths, many=True).data
+
+    class Meta:
+        model = Ruta
+        fields = [
+            'id', 'region_code', 'folio', 'nombre', 'origen', 'destino', 'descripcion', 'estado', 'color_hex', 'imagen',
+            'geometry', 'calles_ida', 'calles_regreso', 'calles_ida_alternativa', 'calles_regreso_alternativa', 'trazados',
+        ]
 
 
 class VehiculoRutaSerializer(serializers.ModelSerializer):

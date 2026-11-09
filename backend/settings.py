@@ -20,6 +20,11 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 MATCH_MAX_ROUTE_DISTANCE_METERS = int(os.getenv('MATCH_MAX_ROUTE_DISTANCE_METERS', '1000'))
 MATCH_LOCATION_MAX_AGE_SECONDS = int(os.getenv('MATCH_LOCATION_MAX_AGE_SECONDS', '60'))
 MATCH_AVERAGE_SPEED_KMH = float(os.getenv('MATCH_AVERAGE_SPEED_KMH', '20'))
+ROUTE_PLANNER_WALK_RADIUS_METERS = int(os.getenv('ROUTE_PLANNER_WALK_RADIUS_METERS', '2000'))
+ROUTE_PLANNER_WALKING_SPEED_KMH = float(os.getenv('ROUTE_PLANNER_WALKING_SPEED_KMH', '4.5'))
+ROUTE_GEOMETRY_CACHE_SECONDS = int(os.getenv('ROUTE_GEOMETRY_CACHE_SECONDS', '86400'))
+OSRM_BASE_URL = os.getenv('OSRM_BASE_URL', 'https://router.project-osrm.org')
+OSRM_TIMEOUT_SECONDS = int(os.getenv('OSRM_TIMEOUT_SECONDS', '8'))
 MATCH_REFERENCE_FARE_CLP = os.getenv('MATCH_REFERENCE_FARE_CLP')
 if MATCH_REFERENCE_FARE_CLP is not None:
     MATCH_REFERENCE_FARE_CLP = int(MATCH_REFERENCE_FARE_CLP)
@@ -34,7 +39,7 @@ SECRET_KEY = 'django-insecure-)v(zhv()d@g-@q)#c(j10#*ow4z3a9+jm^7@z$v5060e46i=+b
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ['*']
+ALLOWED_HOSTS = ['localhost', '127.0.0.1', '[::1]', '192.168.1.185']
 
 
 # Application definition
@@ -95,7 +100,7 @@ DATABASES = {
             'HOST': 'localhost',
             'PORT': '5432',
         }
-}
+}   
 
 
 # Password validation
@@ -133,6 +138,8 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
 STATIC_URL = 'static/'
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
 
 # Permitir peticiones desde cualquier origen (necesario para pruebas locales con Expo/React Native)
 CORS_ALLOW_ALL_ORIGINS = True

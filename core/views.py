@@ -11,7 +11,7 @@ from rest_framework import serializers, status, views, viewsets
 from rest_framework.decorators import action
 from rest_framework.authentication import TokenAuthentication
 from rest_framework.authtoken.models import Token
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.exceptions import PermissionDenied
 
@@ -47,14 +47,17 @@ from .serializers import (
     LicenciaSerializer,
     NotificacionSerializer,
     RutaSerializer,
+    RutaListaSerializer,
     SolicitudSerializer,
     TrazadoRutaSerializer,
+    TripPlanningSerializer,
     UbicacionSerializer,
     UsuarioSerializer,
     VehiculoRutaSerializer,
     VehiculoSerializer,
     ViajeSerializer,
 )
+from .services.route_planner import planificar_viaje
 
 
 def is_admin_user(user):
@@ -112,9 +115,58 @@ class VehiculoViewSet(viewsets.ModelViewSet):
 
 
 class RutaViewSet(viewsets.ModelViewSet):
-    queryset = Ruta.objects.prefetch_related('trazados').all()
+    queryset = Ruta.objects.all()
     serializer_class = RutaSerializer
     permission_classes = [AdminOrAuthenticatedRead]
+
+    def get_queryset(self):
+        queryset = Ruta.objects.all()
+        if getattr(self, 'action', None) == 'list':
+            points = TrazadoRuta.objects.order_by('tipo_trazado', 'sentido', 'orden').only(
+                'ruta_id', 'tipo_trazado', 'sentido', 'orden', 'calle', 'latitud', 'longitud',
+            )
+            return queryset.prefetch_related(Prefetch('trazados', queryset=points, to_attr='puntos_lista'))
+        return queryset.prefetch_related('trazados')
+
+    def get_serializer_class(self):
+        if getattr(self, 'action', None) == 'list':
+            return RutaListaSerializer
+        return RutaSerializer
+
+    def get_permissions(self):
+        if getattr(self, 'action', None) == 'planificar':
+            return [IsAuthenticated()]
+        return super().get_permissions()
+
+    def destroy(self, request, *args, **kwargs):
+        # Las solicitudes y viajes históricos referencian la ruta. Desactivarla
+        # conserva esas relaciones y evita un borrado en cascada accidental.
+        route = self.get_object()
+        route.estado = 'INACTIVA'
+        route.save(update_fields=['estado'])
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @action(detail=False, methods=['post'], url_path='planificar')
+    def planificar(self, request):
+        input_serializer = TripPlanningSerializer(data=request.data)
+        if not input_serializer.is_valid():
+            return Response(input_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        alternatives = planificar_viaje(
+            input_serializer.validated_data['origen'],
+            input_serializer.validated_data['destino'],
+        )
+        formatted = []
+        for alternative in alternatives:
+            item = dict(alternative)
+            item['ruta'] = RutaSerializer(alternative['ruta']).data
+            item['ruta'].pop('trazados', None)
+            formatted.append(item)
+        return Response({
+            'ruta_recomendada': formatted[0] if formatted else None,
+            'alternativas': formatted,
+            'detalle': None if formatted else 'No se encontró una ruta con coordenadas completas y puntos de subida y bajada dentro del radio permitido.',
+            'radio_caminata_maximo_metros': getattr(settings, 'ROUTE_PLANNER_WALK_RADIUS_METERS', 2_000),
+        })
 
     @action(detail=False, methods=['get'], url_path='match')
     def match(self, request):
@@ -141,12 +193,19 @@ class RutaViewSet(viewsets.ModelViewSet):
         routes = Ruta.objects.filter(estado='ACTIVA').prefetch_related('trazados').all()
         best_route, best_distance = None, float('inf')
         for route in routes:
-            points = list(route.trazados.all())
-            if not points:
+            paths = {}
+            for point in route.trazados.all():
+                paths.setdefault((point.tipo_trazado, point.sentido), []).append(point)
+            complete_paths = [
+                point for path in paths.values()
+                if len(path) > 1 and all(p.latitud is not None and p.longitud is not None for p in path)
+                for point in path
+            ]
+            if not complete_paths:
                 continue
             route_distance = min(
                 distance_m(latitude, longitude, float(point.latitud), float(point.longitud))
-                for point in points
+                for point in complete_paths
             )
             if route_distance < best_distance:
                 best_route, best_distance = route, route_distance
@@ -203,6 +262,13 @@ class TrazadoRutaViewSet(viewsets.ModelViewSet):
     queryset = TrazadoRuta.objects.select_related('ruta').all()
     serializer_class = TrazadoRutaSerializer
     permission_classes = [AdminOrAuthenticatedRead]
+
+    def get_queryset(self):
+        queryset = TrazadoRuta.objects.select_related('ruta').all()
+        route_id = self.request.query_params.get('ruta')
+        if route_id:
+            queryset = queryset.filter(ruta_id=int(route_id)) if route_id.isdigit() else queryset.none()
+        return queryset
 
 
 class VehiculoRutaViewSet(viewsets.ModelViewSet):
@@ -272,7 +338,7 @@ class SolicitudViewSet(viewsets.ModelViewSet):
                 newest_location.fecha_hora < timezone.now() - timedelta(seconds=max_age)):
             raise serializers.ValidationError({'vehiculo': 'La ubicación del vehículo ya no está actualizada.'})
         with transaction.atomic():
-            locked_vehicle = Vehiculo.objects.select_for_update().select_related('conductor__usuario').get(pk=vehicle.pk)
+            locked_vehicle = Vehiculo.objects.select_for_update().get(pk=vehicle.pk)
             if seats < 1 or seats > 4 or locked_vehicle.asientos_disponibles < seats:
                 raise serializers.ValidationError({'vehiculo': 'El vehículo no tiene suficientes cupos disponibles.'})
             solicitud = serializer.save(usuario=user, estado='PENDIENTE')
@@ -513,12 +579,10 @@ class UsuarioTemporalView(views.APIView):
 
 
 class RegistroUsuarioView(views.APIView):
-    authentication_classes = [TokenAuthentication]
+    permission_classes = [AllowAny]
+    authentication_classes = []
 
     def post(self, request):
-        user = request.user
-        if user.tipo_usuario != 'TEMPORAL':
-            return Response({'error': 'Solo una sesión temporal puede completar el registro.'}, status=status.HTTP_403_FORBIDDEN)
         data = request.data
         nombre = str(data.get('nombre_usuario') or '').strip()
         apellido = str(data.get('apellido_usuario') or '').strip()
@@ -529,29 +593,30 @@ class RegistroUsuarioView(views.APIView):
             return Response({'error': 'Todos los campos son obligatorios.'}, status=status.HTTP_400_BAD_REQUEST)
         if len(password) < 8:
             return Response({'error': 'La contraseña debe tener al menos 8 caracteres.'}, status=status.HTTP_400_BAD_REQUEST)
-        if Usuario.objects.filter(email__iexact=correo).exclude(pk=user.pk).exists():
+        if Usuario.objects.filter(email__iexact=correo).exists():
             return Response({'error': 'Ya existe una cuenta con ese correo.'}, status=status.HTTP_400_BAD_REQUEST)
-        if Usuario.objects.filter(username__iexact=correo).exclude(pk=user.pk).exists():
+        if Usuario.objects.filter(username__iexact=correo).exists():
             return Response({'error': 'Ese correo ya está asociado a otra cuenta.'}, status=status.HTTP_400_BAD_REQUEST)
-        user.nombre_usuario = nombre
-        user.apellido_usuario = apellido
-        user.email = correo
-        user.username = correo
-        user.telefono = telefono
-        user.set_password(password)
-        user.tipo_usuario = 'REGISTRADO'
-        user.installation_id = None
-        user.is_active = True
-        user.save(update_fields=[
-            'nombre_usuario', 'apellido_usuario', 'email', 'username', 'telefono',
-            'password', 'tipo_usuario', 'installation_id', 'is_active',
-        ])
+        identificador = f'USR-{secrets.token_hex(10).upper()}'
+        while Usuario.objects.filter(identificador=identificador).exists():
+            identificador = f'USR-{secrets.token_hex(10).upper()}'
+        user = Usuario.objects.create_user(
+            username=correo,
+            email=correo,
+            password=password,
+            identificador=identificador,
+            tipo_usuario='REGISTRADO',
+            nombre_usuario=nombre,
+            apellido_usuario=apellido,
+            telefono=telefono,
+            is_active=True,
+        )
         return Response({
             'mensaje': 'Usuario registrado exitosamente.',
             'usuario_id': user.id,
             'identificador': user.identificador,
             'tipo_usuario': user.tipo_usuario,
-        }, status=status.HTTP_200_OK)
+        }, status=status.HTTP_201_CREATED)
 
 
 class LoginUsuarioView(views.APIView):

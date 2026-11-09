@@ -18,36 +18,6 @@ Paquetes Python que requiere el código:
 - django-cors-headers
 - psycopg (adaptador de PostgreSQL; puede instalarse como psycopg[binary])
 
-El repositorio no contiene requirements.txt. Para instalar estos paquetes en un entorno virtual:
-
-  python -m venv .venv
-  .\.venv\Scripts\Activate.ps1
-  python -m pip install "Django==6.0.4" djangorestframework django-cors-headers "psycopg[binary]"
-
-Si PowerShell bloquea la activación, ejecuta:
-  Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
-
-La base de datos de rutas de La Granja ya está incluida en `core/fixtures/la_granja_routes.json`:
-- 27 rutas, 401 puntos de trazado y 5.275 asociaciones vehículo/ruta.
-- No necesitas copiar el Excel a otra computadora para ejecutar la app.
-- Después de `python manage.py migrate`, carga las rutas con:
-
-  python manage.py loaddata core/fixtures/la_granja_routes.json
-
-Solo si vas a regenerar esa fixture desde el Excel, instala estas dependencias opcionales:
-  python -m pip install pandas openpyxl geopy
-
-Coloca el Excel original en la raíz del repositorio (junto a manage.py). El archivo está excluido de Git;
-comparte la fixture JSON generada, no el Excel de 27 MB. Para validar el Excel sin modificar la base:
-  python manage.py importar_rutas_excel
-Para importar o actualizar en PostgreSQL las rutas, trazados y vehículos de La Granja:
-  python manage.py importar_rutas_excel --aplicar --reemplazar-trazados
-
-El Excel no incluye coordenadas GPS. El importador consulta Nominatim para ubicar calles y aproxima
-los rótulos que no corresponden a una calle entre los puntos vecinos. El mapa no sustituye una geometría
-vial oficial. Los vehículos nuevos quedan sin conductor y fuera de servicio hasta que administración los asigne.
-No se requiere migración: el modelo Ruta usa el folio como texto y TrazadoRuta requiere sentido y calle.
-
 3. BASE DE DATOS
 ----------------
 - PostgreSQL debe estar iniciado.
@@ -58,12 +28,9 @@ No se requiere migración: el modelo Ruta usa el folio como texto y TrazadoRuta 
 
 Desde la carpeta raíz del proyecto, después de configurar la base:
   python manage.py migrate
-  python manage.py loaddata core/fixtures/la_granja_routes.json
 
 Opcional: poblar datos ficticios de demostración:
   python manage.py seed_demo_data
-En una base nueva, este comando crea pasajero, conductor y administrador demo e imprime sus contraseñas.
-El vehículo demo queda asociado a una ruta oficial de La Granja para probar el flujo con GPS.
 
 4. FRONTEND (EXPO / REACT NATIVE)
 ---------------------------------
@@ -102,7 +69,6 @@ Para ejecutar en web (si las dependencias del entorno Expo están disponibles):
 Terminal 1, carpeta raíz:
   .\.venv\Scripts\Activate.ps1
   python manage.py migrate
-  python manage.py loaddata core/fixtures/la_granja_routes.json
   python manage.py runserver 0.0.0.0:8000
 
 Terminal 2:
